@@ -211,3 +211,6 @@ __marimo__/
 
 # Crawled report data (large files)
 data/reports/
+
+# ChromaDB
+data/chroma/
