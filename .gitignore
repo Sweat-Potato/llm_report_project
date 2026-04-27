@@ -214,3 +214,5 @@ data/reports/
 
 # ChromaDB
 data/chroma/
+# Test files
+tests/
