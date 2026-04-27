@@ -4,12 +4,21 @@ loader.py
 
 파일명 형식: 날짜_증권사_섹터_제목.pdf
   예) 260330_DS투자증권_자동차_지역별 정책 점검.pdf
-      20260420_industry_649803000.pdf
 
 역할 분담:
   폴더명  → 증권사명  (규칙 기반, 100% 정확)
   파일명  → 날짜, 섹터, 제목 (규칙 기반)
   LLM     → 애널리스트, 투자의견, 목표주가, 리포트유형 (형식 제각각)
+
+폴더 구조:
+  llm_report_project/
+  ├── src/processing/Loader.py   ← 이 파일
+  └── data/
+      ├── reports/
+      │   └── reports_naver_industry/
+      │       ├── DS투자증권/
+      │       └── 교보증권/
+      └── reports_cache.json
 """
 
 import re
@@ -23,12 +32,15 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# 프로젝트 루트 기준 경로 (Loader.py → processing → src → 루트)
+BASE_DIR    = Path(__file__).parent.parent.parent
+REPORTS_DIR = BASE_DIR / "data" / "reports" / "reports_naver_industry"
+CACHE_PATH  = BASE_DIR / "data" / "reports_cache.json"
+
 
 # ─────────────────────────────────────
 # 1. 파일명 파싱
 #    고정 형식: YYMMDD_증권사명_섹터_제목.pdf
-#    예) 260330_DS투자증권_자동차_지역별 정책 점검.pdf
-#
 #    parts[0] = 날짜   (YYMMDD)
 #    parts[1] = 증권사 (폴더명과 동일, 교차 검증용)
 #    parts[2] = 섹터
@@ -38,21 +50,18 @@ def parse_filename(filename: str, folder_name: str) -> dict:
     stem  = Path(filename).stem
     parts = stem.split("_")
 
-    date        = None
-    firm_in_filename = None  # 파일명 속 증권사명 (교차 검증용)
-    sector      = None
-    title       = None
-
-    # 폴더명 = 증권사명 (1순위, 가장 정확)
-    source_firm = folder_name
+    date             = None
+    firm_in_filename = None
+    sector           = None
+    title            = None
+    source_firm      = folder_name  # 폴더명 = 증권사명 (1순위)
 
     # parts[0]: 날짜 변환 (YYMMDD → 20YY-MM-DD)
     date_raw = parts[0] if parts else ""
     if re.match(r'^\d{6}$', date_raw):
         date = f"20{date_raw[:2]}-{date_raw[2:4]}-{date_raw[4:]}"
 
-    # parts[1]: 파일명 속 증권사명
-    # 폴더명과 다를 경우 경고 출력 (데이터 품질 체크)
+    # parts[1]: 파일명 속 증권사명 (교차 검증)
     if len(parts) >= 2:
         firm_in_filename = parts[1]
         if firm_in_filename != folder_name:
@@ -62,7 +71,7 @@ def parse_filename(filename: str, folder_name: str) -> dict:
     if len(parts) >= 3:
         sector = parts[2]
 
-    # parts[3:]: 제목 (언더바로 나뉜 단어들 공백으로 합치기)
+    # parts[3:]: 제목
     if len(parts) >= 4:
         title = " ".join(parts[3:]).strip()
 
@@ -78,11 +87,6 @@ def parse_filename(filename: str, folder_name: str) -> dict:
 # 2. LLM으로 메타데이터 추출
 # ─────────────────────────────────────
 def extract_metadata_with_llm(first_page_text: str, source_firm: str) -> dict:
-    """
-    첫 페이지 텍스트 → LLM → 애널리스트, 투자의견, 목표주가, 리포트유형
-    어떤 형식의 리포트든 동일하게 처리
-    """
-
     prompt = f"""아래는 '{source_firm}' 증권사 리포트 텍스트입니다.
 다음 정보를 JSON으로 추출하세요. 없으면 null.
 
@@ -111,11 +115,8 @@ def extract_metadata_with_llm(first_page_text: str, source_firm: str) -> dict:
             temperature=0,
         )
         raw = response.choices[0].message.content.strip()
-
-        # 마크다운 코드블록 제거
         raw = re.sub(r'^```json\s*', '', raw)
         raw = re.sub(r'\s*```$',     '', raw)
-
         result = json.loads(raw)
 
         return {
@@ -142,30 +143,25 @@ def extract_metadata_with_llm(first_page_text: str, source_firm: str) -> dict:
 def load_single_pdf(pdf_path: str) -> dict:
     pdf_path    = Path(pdf_path)
     filename    = pdf_path.name
-    folder_name = pdf_path.parent.name   # 폴더명 = 증권사명
+    folder_name = pdf_path.parent.name  # 폴더명 = 증권사명
 
-    # 파일명 파싱
     file_meta = parse_filename(filename, folder_name)
 
-    # ── 텍스트 추출: PyPDFLoader (레이아웃 분리) ──────────────
+    # 텍스트 추출: PyPDFLoader (레이아웃 분리)
     pypdf_loader = PyPDFLoader(str(pdf_path))
     pypdf_docs   = pypdf_loader.load()
     total_pages  = len(pypdf_docs)
 
     pages_text = []
     for doc in pypdf_docs:
-        page_num = doc.metadata.get("page", 0) + 1  # 0-index → 1-index
+        page_num = doc.metadata.get("page", 0) + 1
         text     = doc.page_content.strip()
         if text:
-            pages_text.append({
-                "page_num": page_num,
-                "text":     text
-            })
+            pages_text.append({"page_num": page_num, "text": text})
 
     full_text = "\n\n".join([p["text"] for p in pages_text])
 
-    # ── LLM 메타데이터 추출: 앞 3페이지 합쳐서 전달 ──────────
-    # 1페이지가 이미지거나 목차인 경우 대비
+    # LLM 메타데이터 추출: 앞 3페이지 합쳐서 전달
     first_pages_text = "\n\n".join([
         p["text"] for p in pages_text[:3]
         if p["text"] and len(p["text"]) > 50
@@ -180,8 +176,8 @@ def load_single_pdf(pdf_path: str) -> dict:
         "filename":    filename,
         "pdf_path":    str(pdf_path),
         "total_pages": total_pages,
-        **file_meta,   # source_firm, report_date, sector, title
-        **llm_meta,    # analyst, rating, target_price, report_type
+        **file_meta,
+        **llm_meta,
         "full_text":   full_text,
     }
 
@@ -189,7 +185,7 @@ def load_single_pdf(pdf_path: str) -> dict:
 # ─────────────────────────────────────
 # 4. 전체 폴더 로드 (하위 폴더 포함)
 # ─────────────────────────────────────
-def load_all_reports(reports_dir: str = "./reports") -> list[dict]:
+def load_all_reports(reports_dir: str = str(REPORTS_DIR)) -> list[dict]:
     reports_dir = Path(reports_dir)
     pdf_files   = sorted(reports_dir.glob("**/*.pdf"))
 
@@ -223,19 +219,14 @@ def load_all_reports(reports_dir: str = "./reports") -> list[dict]:
 # 5. JSON 캐시 저장 / 불러오기
 # ─────────────────────────────────────
 def save_cache(reports: list[dict],
-               cache_path: str = "./data/reports_cache.json"):
+               cache_path: str = str(CACHE_PATH)):
     Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # 그대로 저장 (load_single_pdf에서 이미 pages/tables 미포함)
-    slim = reports
-
     with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(slim, f, ensure_ascii=False, indent=2)
-
+        json.dump(reports, f, ensure_ascii=False, indent=2)
     print(f"✅ 캐시 저장 → {cache_path}")
 
 
-def load_cache(cache_path: str = "./data/reports_cache.json") -> list[dict]:
+def load_cache(cache_path: str = str(CACHE_PATH)) -> list[dict]:
     with open(cache_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -244,8 +235,17 @@ def load_cache(cache_path: str = "./data/reports_cache.json") -> list[dict]:
 # 실행
 # ─────────────────────────────────────
 if __name__ == "__main__":
-    reports = load_all_reports("./reports_naver_industry/교보증권")
-    save_cache(reports, "./data/reports_cache.json")
+    print(f"프로젝트 루트: {BASE_DIR}")
+    print(f"리포트 경로:   {REPORTS_DIR}")
+    print(f"존재 여부:     {REPORTS_DIR.exists()}\n")
+
+    # 전체 증권사 로드 (기본값)
+    #reports = load_all_reports()
+
+    # 특정 증권사만 로드하려면:
+    reports = load_all_reports(str(REPORTS_DIR / "DS투자증권"))
+
+    save_cache(reports)
 
     print("\n" + "="*60)
     print("📊 로드 결과 요약")
