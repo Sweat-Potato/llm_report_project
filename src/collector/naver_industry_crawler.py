@@ -31,11 +31,11 @@ from pathlib import Path
 BASE_URL      = "https://finance.naver.com"
 LIST_URL      = BASE_URL + "/research/industry_list.naver"
 
-DEFAULT_FROM  = "2026-01-23"
+DEFAULT_FROM  = "2026-03-23"
 DEFAULT_TO    = "2026-04-23"
 
 SAVE_DIR      = Path(__file__).parent.parent.parent / "data/reports/reports_naver_industry"
-METADATA_FILE = "./naver_industry_metadata.json"
+METADATA_FILE = str(Path(__file__).parent.parent.parent / "data/reports/metadata/naver_industry_metadata.json")
 
 DELAY_PAGE    = 2.0
 DELAY_PDF     = 1.5
