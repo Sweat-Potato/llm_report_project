@@ -41,6 +41,7 @@ STRATEGY_NAME = "chunking_02_semantic"
 # ── 파라미터 ──────────────────────────────────────
 BREAKPOINT_TYPE   = "percentile"  # "percentile" | "standard_deviation" | "interquartile"
 BREAKPOINT_AMOUNT = 85            # percentile 기준: 상위 15%에서만 분할 (클수록 청크 크고 개수 적음)
+LONG_THRESHOLD    = 20000         # 초과: 스킵 (Semantic 청킹 시간 과다 소요)
 #
 # 조정 가이드:
 #   threshold_amount 낮춤 → 더 자주 분할 → 작은 청크 多
@@ -61,6 +62,7 @@ def _make_splitter() -> SemanticChunker:
 def chunk_reports(reports: list[dict]) -> ChunkingResult:
     """
     전략 2: SemanticChunker로 의미 기반 청킹.
+    20000자 초과 리포트는 스킵.
 
     ⚠️  각 리포트 처리 시 OpenAI Embedding API를 호출합니다.
         비용 발생 주의.
@@ -76,11 +78,18 @@ def chunk_reports(reports: list[dict]) -> ChunkingResult:
     all_chunks: list[Chunk] = []
     total_chars = 0
     global_idx  = 0
+    skipped     = 0
 
     for report in reports:
         text_src = report.get("clean_text") or report.get("full_text", "")
         text_src = text_src.strip()
         if not text_src:
+            continue
+
+        # 20000자 초과 리포트 스킵
+        if len(text_src) > LONG_THRESHOLD:
+            skipped += 1
+            print(f"  ⏭️  스킵 ({len(text_src):,}자 > {LONG_THRESHOLD:,}자): {report.get('filename', '')[:50]}")
             continue
 
         total_chars += len(text_src)
@@ -110,6 +119,9 @@ def chunk_reports(reports: list[dict]) -> ChunkingResult:
             global_idx += 1
 
         print(f"     → {len(texts)}개 청크  (평균 {sum(len(t) for t in texts)//len(texts) if texts else 0}자)")
+
+    if skipped:
+        print(f"\n  📊 스킵된 리포트: {skipped}개 ({LONG_THRESHOLD:,}자 초과)")
 
     return ChunkingResult(
         strategy     = STRATEGY_NAME,
