@@ -23,7 +23,12 @@ cleaner.py
 """
 
 import re
+import json
+from pathlib import Path
 from langchain_core.documents import Document
+
+BASE_DIR        = Path(__file__).parent.parent.parent
+CLEAN_CACHE_PATH = BASE_DIR / "data" / "clean_text" / "clean_text.json"
 
 
 # ══════════════════════════════════════════════════════
@@ -468,7 +473,20 @@ def clean_reports(
         print(f"   정제 합계  : {total_cleaned:,}자")
         print(f"   제거 합계  : {removed_total:,}자 ({removed_total / total_orig * 100:.1f}%)")
 
+    save_clean_texts(results)
     return results
+
+
+def save_clean_texts(
+    reports: list[dict],
+    cache_path: str = str(CLEAN_CACHE_PATH),
+) -> None:
+    out = Path(cache_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    data = [{"filename": r["filename"], "clean_text": r["clean_text"]} for r in reports]
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"   저장: {out} ({len(data)}개)")
 
 
 # ══════════════════════════════════════════════════════
@@ -480,7 +498,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     BASE_DIR   = Path(__file__).parent.parent.parent
-    CACHE_PATH = BASE_DIR / "data" / "reports_cache.json"
+    CACHE_PATH = BASE_DIR / "data" / "loader_metadata" / "reports_cache.json"
 
     with open(CACHE_PATH, encoding="utf-8") as f:
         reports = json.load(f)
