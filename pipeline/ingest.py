@@ -15,8 +15,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.processing.Loader  import load_all_reports
 from src.processing.cleaner import clean_reports
 from src.processing.chunking import (
-    chunking_01_recursive as s1,
-    chunking_02_semantic  as s2,
+    chunking_01_recursive as c1,
+    chunking_02_semantic  as c2,
 )
 from src.embedding  import embedding_01_openai  as emb1
 from src.vectorstore import vectorstore_01_chroma as vs1
@@ -37,11 +37,9 @@ VS_BASE_DIR = PROJECT_ROOT / "data" / "vectorstore"
 FORCE_RELOAD = False
 # FORCE_RELOAD = True  # 전체 재파싱
 
-# ── 청킹 전략 (실행할 것만 남기기) ──────────
-STRATEGIES = [
-    (s1, "chunking_01_recursive.json"),  # 전략 1: RecursiveCharacterTextSplitter
-    # (s2, "chunking_02_semantic.json"),   # 전략 2: SemanticChunker (OpenAI 비용)
-]
+# ── 청킹 전략 (하나만 선택) ─────────────────
+CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
+# CHUNKING = c2  # 전략 2: SemanticChunker (OpenAI 비용)
 
 # ── 임베딩 전략 (하나만 선택) ────────────────
 EMBEDDING = emb1    # 전략 1: OpenAI text-embedding-3-small
@@ -77,25 +75,18 @@ def main():
     print("\n[ STEP 3 ] CHUNK")
     CHUNKS_DIR.mkdir(parents=True, exist_ok=True)
 
-    results = []
-    for module, filename in STRATEGIES:
-        out_path = CHUNKS_DIR / filename
-        print(f"\n-- {filename}")
-        try:
-            result = module.chunk_reports(reports)
-            result.save(str(out_path))
-            sizes = [c.char_count for c in result.chunks]
-            print(f"   청크 수: {result.chunk_count} | 평균: {result.avg_chunk_size:.0f}자 "
-                  f"| 최소: {min(sizes)}자 | 최대: {max(sizes)}자")
-            results.append(result)
-        except Exception as e:
-            print(f"   실패: {e}")
-
-    if len(results) > 1:
-        print("\n[ 전략 비교 ]")
-        for r in results:
-            sizes = [c.char_count for c in r.chunks]
-            print(f"  {r.strategy:<20} 청크:{r.chunk_count:>5} | 평균:{r.avg_chunk_size:>7.0f}자")
+    out_path = CHUNKS_DIR / f"{CHUNKING.STRATEGY_NAME}.json"
+    print(f"\n-- {CHUNKING.STRATEGY_NAME}")
+    try:
+        result = CHUNKING.chunk_reports(reports)
+        result.save(str(out_path))
+        sizes = [c.char_count for c in result.chunks]
+        print(f"   청크 수: {result.chunk_count} | 평균: {result.avg_chunk_size:.0f}자 "
+              f"| 최소: {min(sizes)}자 | 최대: {max(sizes)}자")
+        results = [result]
+    except Exception as e:
+        print(f"   실패: {e}")
+        results = []
 
     # 4. EMBED + VECTORSTORE
     if not RUN_EMBEDDING:
@@ -106,15 +97,18 @@ def main():
     print("\n[ STEP 4 ] EMBED + VECTORSTORE")
     embeddings = EMBEDDING.get_embeddings()
 
-    for result in results:
-        # 벡터스토어 / 임베딩 / 청킹 조합별로 별도 DB 경로 사용
-        db_path = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME / result.strategy)
-        print(f"\n-- {result.strategy}  →  {EMBEDDING.STRATEGY_NAME}  →  {VECTORSTORE.STRATEGY_NAME}")
-        try:
-            docs = EMBEDDING.chunks_to_documents(result.chunks)
-            VECTORSTORE.build(docs, embeddings, db_path)
-        except Exception as e:
-            print(f"   실패: {e}")
+    if not results:
+        print("청킹 결과 없음. 파이프라인 종료.")
+        return
+
+    result  = results[0]
+    db_path = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME / CHUNKING.STRATEGY_NAME)
+    print(f"\n-- {CHUNKING.STRATEGY_NAME}  →  {EMBEDDING.STRATEGY_NAME}  →  {VECTORSTORE.STRATEGY_NAME}")
+    try:
+        docs = EMBEDDING.chunks_to_documents(result.chunks)
+        VECTORSTORE.build(docs, embeddings, db_path)
+    except Exception as e:
+        print(f"   실패: {e}")
 
     print("\n파이프라인 완료")
 

@@ -19,8 +19,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_community.vectorstores import Chroma
 from langchain.retrievers import EnsembleRetriever
 
-from src.retriever.retriever import retrieve
-from src.reranker.reranker  import rerank
+# retrieve_fn, rerank_fn 은 main.py에서 주입받음
 
 
 # ── LLM 설정 ──────────────────────────────────────────────────────────────────
@@ -35,18 +34,20 @@ def get_llm_strong():
 # ── Step 1: 검색 (Hybrid + Reranker) ─────────────────────────────────────────
 
 def step_retrieve(
-    retriever: EnsembleRetriever,
-    topic:     str,
-    k:         int = 20,
-    top_n:     int = 10,
+    retriever:    EnsembleRetriever,
+    topic:        str,
+    retrieve_fn:  callable,
+    rerank_fn:    callable,
+    k:            int = 20,
+    top_n:        int = 10,
 ) -> list[Document]:
     """Step 1: Hybrid Search → Cross-Encoder Rerank"""
     print(f"\n[Step 1] '{topic}' 검색 중...")
 
-    candidates = retrieve(retriever, topic, k=k)
+    candidates = retrieve_fn(retriever, topic, k=k)
     print(f"  → Hybrid Search: {len(candidates)}개 후보")
 
-    docs = rerank(topic, candidates, top_n=top_n)
+    docs = rerank_fn(topic, candidates, top_n=top_n)
     print(f"  → Reranking 후: {len(docs)}개")
 
     broker_counts = {}
@@ -425,18 +426,20 @@ def step_generate_final_report(
 # ── 전체 파이프라인 ────────────────────────────────────────────────────────────
 
 def generate_report(
-    retriever:  object,
-    topic:      str,
-    output_dir: str = "./data/reports_output",
-    k:          int = 20,
-    top_n:      int = 10,
+    retriever:   object,
+    topic:       str,
+    retrieve_fn: callable,
+    rerank_fn:   callable,
+    output_dir:  str = "./data/reports_output",
+    k:           int = 20,
+    top_n:       int = 10,
 ) -> str:
     """전체 리포트 생성 파이프라인"""
     print("\n" + "=" * 60)
     print(f"리포트 생성 시작: {topic}")
     print("=" * 60)
 
-    docs = step_retrieve(retriever, topic, k=k, top_n=top_n)
+    docs = step_retrieve(retriever, topic, retrieve_fn=retrieve_fn, rerank_fn=rerank_fn, k=k, top_n=top_n)
     if not docs:
         return f"'{topic}'에 관련된 리포트를 찾을 수 없습니다."
 

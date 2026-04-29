@@ -9,6 +9,8 @@ Ensemble → 두 결과를 가중치로 합산
 한국어 형태소 분석(kiwipiepy)으로 BM25 토크나이징 품질 개선:
 - "반도체업황"→["반도체","업황"], 조사·어미 제거
 """
+STRATEGY_NAME = "retriever_01_ensemble"
+
 from langchain.schema import Document
 from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever

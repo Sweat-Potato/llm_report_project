@@ -10,6 +10,7 @@ ChromaDB 벡터스토어 전략 (영구 저장)
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from langchain.schema import Document
@@ -23,10 +24,14 @@ BATCH_SIZE      = 100   # OpenAI API 토큰 한도 대응
 
 def build(docs: list[Document], embeddings, db_path: str) -> Chroma:
     """
-    ChromaDB 벡터스토어 생성 (배치 처리)
-    - DB가 없으면 새로 생성
-    - DB가 있으면 기존 데이터 유지하고 추가
+    ChromaDB 벡터스토어 생성 (배치 처리, 덮어쓰기)
+    - DB가 이미 존재하면 컬렉션 삭제 후 새로 생성
+    - 중복 저장 방지
     """
+    # 기존 디렉토리 통째로 삭제 (덮어쓰기)
+    if Path(db_path).exists():
+        shutil.rmtree(db_path)
+        print(f"  기존 DB 삭제 완료")
     Path(db_path).mkdir(parents=True, exist_ok=True)
 
     print(f"  임베딩 + ChromaDB 저장 중... ({len(docs)}개 청크)")

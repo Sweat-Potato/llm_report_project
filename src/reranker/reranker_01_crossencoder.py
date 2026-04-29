@@ -12,6 +12,8 @@ Cross-Encoder로 재점수화해서 진짜 관련있는 문서만 추림
     BAAI/bge-reranker-v2-m3  → 다국어 지원 (한국어 포함), 무료, 로컬 실행
     BAAI/bge-reranker-large  → 영어 위주, 더 빠름
 """
+STRATEGY_NAME = "reranker_01_crossencoder"
+
 from langchain.schema import Document
 
 
