@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.vector_store           import load_vectorstore, is_db_exists, CHROMA_DB_PATH
+from src.vectorstore.vectorstore_01_chroma           import load_vectorstore, is_db_exists, CHROMA_DB_PATH
 from src.retriever.retriever    import build_retriever
 from src.reranker.reranker      import rerank
 from src.reportcreator.report_chain import generate_report, step_retrieve
