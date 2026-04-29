@@ -17,20 +17,22 @@ import sys
 import argparse
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.vector_store import load_vectorstore, is_db_exists, CHROMA_DB_PATH
+from src.vector_store           import load_vectorstore, is_db_exists, CHROMA_DB_PATH
 from src.retriever.retriever    import build_retriever
-from src.reranker.reranker     import rerank
-from src.report_chain import generate_report, step_retrieve
+from src.reranker.reranker      import rerank
+from src.reportcreator.report_chain import generate_report, step_retrieve
 
 
 # ── 검색 ──────────────────────────────────────────────────────────────────────
 
 def search(retriever, query: str, top_n: int = 5):
     """Hybrid Search + Rerank 후 결과 출력"""
-    from src.retriever import retrieve
+    from src.retriever.retriever import retrieve
     candidates = retrieve(retriever, query, k=20)
     docs       = rerank(query, candidates, top_n=top_n)
 
