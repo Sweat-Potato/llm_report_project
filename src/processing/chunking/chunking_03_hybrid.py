@@ -31,7 +31,7 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
     from src.processing.chunking.base import Chunk, ChunkingResult, load_reports_cache, make_chunk_id, extract_meta
 
-STRATEGY_NAME = "chunking_03_semantic"
+STRATEGY_NAME = "chunking_03_hybrid"
 
 # ── 파라미터 ──────────────────────────────────────
 SHORT_THRESHOLD  = 3000    # 이하: 문장 단위 청킹

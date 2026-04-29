@@ -20,7 +20,7 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
     from src.processing.chunking.base import Chunk, ChunkingResult, load_reports_cache, make_chunk_id, extract_meta
 
-STRATEGY_NAME = "chunking_04_paragraph"
+STRATEGY_NAME = "chunking_04_sentence"
 
 # ── 파라미터 ──────────────────────────────────────
 MIN_CHUNK_SIZE = 50    # 이하: 앞 청크에 병합

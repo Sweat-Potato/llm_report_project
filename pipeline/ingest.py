@@ -20,7 +20,7 @@ from src.processing.chunking import (
     chunking_03_hybrid    as c3,
     chunking_04_sentence  as c4,
 )
-from src.embedding  import embedding_01_openai  as emb1
+from src.embedding  import embedding_01_openai    as emb1
 from src.vectorstore import vectorstore_01_chroma as vs1
 
 # ===========================================
@@ -28,8 +28,8 @@ from src.vectorstore import vectorstore_01_chroma as vs1
 # ===========================================
 
 # ── 데이터 경로 ──────────────────────────────
-#REPORTS_DIR   = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry"
-REPORTS_DIR = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry" 
+# REPORTS_DIR   = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry"
+REPORTS_DIR = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry" / "DS투자증권"  # DS만 테스트
 
 CACHE_PATH  = PROJECT_ROOT / "data" / "loader_metadata" / "reports_cache.json"
 CHUNKS_DIR  = PROJECT_ROOT / "data" / "chunks"
@@ -39,13 +39,11 @@ VS_BASE_DIR = PROJECT_ROOT / "data" / "vectorstore"
 FORCE_RELOAD = False
 # FORCE_RELOAD = True  # 전체 재파싱
 
-# ── 청킹 전략 (실행할 것만 남기기) ──────────
-CHUNKING = [
-    # (c1, "chunking_01_recursive.json"),  # 전략 1: RecursiveCharacterTextSplitter
-    # (c2, "chunking_02_semantic.json"),   # 전략 2: SemanticChunker (OpenAI 비용)
-    # (c3, "chunking_03_hybrid.json"),   
-     (c4, "chunking_04_sentence.json"),   
-]
+# ── 청킹 전략 (하나만 선택) ─────────────────
+CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
+# CHUNKING = c2  # 전략 2: SemanticChunker (OpenAI 비용)
+# CHUNKING = c3  # 전략 3: 길이별 자동 분기 (OpenAI 비용)
+# CHUNKING = c4  # 전략 4: 문단 기준 청킹
 
 # ── 임베딩 전략 (하나만 선택) ────────────────
 EMBEDDING = emb1    # 전략 1: OpenAI text-embedding-3-small
@@ -89,10 +87,9 @@ def main():
         sizes = [c.char_count for c in result.chunks]
         print(f"   청크 수: {result.chunk_count} | 평균: {result.avg_chunk_size:.0f}자 "
               f"| 최소: {min(sizes)}자 | 최대: {max(sizes)}자")
-        results = [result]
     except Exception as e:
         print(f"   실패: {e}")
-        results = []
+        return
 
     # 4. EMBED + VECTORSTORE
     if not RUN_EMBEDDING:
@@ -103,11 +100,6 @@ def main():
     print("\n[ STEP 4 ] EMBED + VECTORSTORE")
     embeddings = EMBEDDING.get_embeddings()
 
-    if not results:
-        print("청킹 결과 없음. 파이프라인 종료.")
-        return
-
-    result  = results[0]
     db_path = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME / CHUNKING.STRATEGY_NAME)
     print(f"\n-- {CHUNKING.STRATEGY_NAME}  →  {EMBEDDING.STRATEGY_NAME}  →  {VECTORSTORE.STRATEGY_NAME}")
     try:

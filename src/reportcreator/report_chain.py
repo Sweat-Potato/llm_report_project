@@ -34,12 +34,12 @@ def get_llm_strong():
 # ── Step 1: 검색 (Hybrid + Reranker) ─────────────────────────────────────────
 
 def step_retrieve(
-    retriever:    EnsembleRetriever,
-    topic:        str,
-    retrieve_fn:  callable,
-    rerank_fn:    callable,
-    k:            int = 20,
-    top_n:        int = 10,
+    retriever:   EnsembleRetriever,
+    topic:       str,
+    retrieve_fn: callable,
+    rerank_fn:   callable,
+    k:           int = 20,
+    top_n:       int = 10,
 ) -> list[Document]:
     """Step 1: Hybrid Search → Cross-Encoder Rerank"""
     print(f"\n[Step 1] '{topic}' 검색 중...")
