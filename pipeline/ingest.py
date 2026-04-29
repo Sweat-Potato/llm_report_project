@@ -17,6 +17,8 @@ from src.processing.cleaner import clean_reports
 from src.processing.chunking import (
     chunking_01_recursive as s1,
     chunking_02_semantic  as s2,
+    chunking_03_hybrid    as s3,
+    chunking_04_sentence  as s4,
 )
 from src.embedding  import embedding_01_openai  as emb1
 from src.vectorstore import vectorstore_01_chroma as vs1
@@ -27,7 +29,7 @@ from src.vectorstore import vectorstore_01_chroma as vs1
 
 # ── 데이터 경로 ──────────────────────────────
 #REPORTS_DIR   = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry"
-REPORTS_DIR = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry" / "DS투자증권"  # DS만 테스트
+REPORTS_DIR = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry" 
 
 CACHE_PATH  = PROJECT_ROOT / "data" / "loader_metadata" / "reports_cache.json"
 CHUNKS_DIR  = PROJECT_ROOT / "data" / "chunks"
@@ -39,8 +41,10 @@ FORCE_RELOAD = False
 
 # ── 청킹 전략 (실행할 것만 남기기) ──────────
 STRATEGIES = [
-    (s1, "chunking_01_recursive.json"),  # 전략 1: RecursiveCharacterTextSplitter
+    # (s1, "chunking_01_recursive.json"),  # 전략 1: RecursiveCharacterTextSplitter
     # (s2, "chunking_02_semantic.json"),   # 전략 2: SemanticChunker (OpenAI 비용)
+    # (s3, "chunking_03_hybrid.json"),   
+     (s4, "chunking_04_sentence.json"),   
 ]
 
 # ── 임베딩 전략 (하나만 선택) ────────────────

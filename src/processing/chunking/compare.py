@@ -28,6 +28,8 @@ try:
     from .base import ChunkingResult, Chunk, load_reports_cache
     from . import chunking_01_recursive as s1
     from . import chunking_02_semantic  as s2
+    from . import chunking_03_semantic  as s3
+    from . import chunking_04_paragraph as s4
     from src.processing.cleaner import clean_reports
 except ImportError:
     import sys
@@ -36,6 +38,8 @@ except ImportError:
     from src.processing.chunking.base import ChunkingResult, Chunk, load_reports_cache
     from src.processing.chunking import chunking_01_recursive as s1
     from src.processing.chunking import chunking_02_semantic  as s2
+    from src.processing.chunking import chunking_03_semantic  as s3
+    from src.processing.chunking import chunking_04_paragraph as s4
     from src.processing.cleaner import clean_reports
 
 # ─────────────────────────────────────────────────
@@ -96,13 +100,11 @@ def measure_keyword_preservation(chunks: list[Chunk]) -> dict:
     keyword_in_chunk = 0
     keyword_total    = 0
 
-    # 청크 전체를 하나의 텍스트로 합쳐서 원본 출현 횟수 기준 파악
     full_text = " ".join(c.text for c in chunks)
     for kw in FINANCIAL_KEYWORDS:
         total_occurrences = full_text.count(kw)
         keyword_total += total_occurrences
 
-        # 각 청크에서 해당 키워드가 중간에 잘리지 않고 완전히 포함된 횟수
         for c in chunks:
             keyword_in_chunk += c.text.count(kw)
 
@@ -119,8 +121,6 @@ def measure_overlap_efficiency(chunks: list[Chunk]) -> dict:
     인접 청크 사이 실제 중복 텍스트 길이 평균.
     overlap이 너무 크면 중복 저장 낭비, 너무 작으면 문맥 단절.
     """
-    # 같은 리포트 내 인접 청크끼리만 비교
-    # chunk_index 순서로 정렬된 동일 source_firm+date 청크들
     from itertools import groupby
 
     def group_key(c: Chunk):
@@ -133,7 +133,6 @@ def measure_overlap_efficiency(chunks: list[Chunk]) -> dict:
         g = list(group)
         for i in range(len(g) - 1):
             a, b = g[i].text, g[i + 1].text
-            # 앞 청크 끝부분과 뒷 청크 시작부분의 공통 부분 측정
             min_len = min(len(a), len(b), 100)
             overlap_len = 0
             for l in range(min_len, 0, -1):
@@ -175,9 +174,8 @@ def measure_parent_child_linkage(result: ChunkingResult) -> dict | None:
 
 def evaluate(result: ChunkingResult) -> dict:
     """단일 전략 전체 평가"""
-    # Parent-Child의 경우 검색 주체(child)만으로 크기 통계
     if result.strategy == "parent_child":
-        search_chunks = [c for c in result.chunks if c.chunk_level == "child"]
+        search_chunks  = [c for c in result.chunks if c.chunk_level == "child"]
         context_chunks = [c for c in result.chunks if c.chunk_level == "parent"]
     else:
         search_chunks  = result.chunks
@@ -186,20 +184,10 @@ def evaluate(result: ChunkingResult) -> dict:
     return {
         "strategy":    result.strategy,
         "report_count": result.report_count,
-
-        # 검색 청크 기준 크기 통계
         "size_stats":        measure_size_stats(search_chunks),
-
-        # 문장 완결성 (검색 청크 기준)
         "sentence_completeness": measure_sentence_completeness(search_chunks),
-
-        # 키워드 보존율 (컨텍스트 청크 기준)
         "keyword_preservation": measure_keyword_preservation(context_chunks),
-
-        # 오버랩 효율 (검색 청크 기준)
         "overlap_efficiency": measure_overlap_efficiency(search_chunks),
-
-        # Parent-Child 전용
         "parent_child_linkage": measure_parent_child_linkage(result),
     }
 
@@ -239,7 +227,7 @@ def print_comparison(evaluations: list[dict]) -> None:
     row("완결률 (%)",   *[e["sentence_completeness"].get("completeness","-")   for e in evaluations])
 
     # 키워드 보존율
-    print("\n[ 금융 키워드 보존율 (컨텍스트 청크 기준) ]")
+    print("\n[ 금융 키워드 보존율 ]")
     row("보존율 (%)",   *[e["keyword_preservation"].get("preservation_rate","-") for e in evaluations])
 
     # 오버랩
@@ -249,7 +237,7 @@ def print_comparison(evaluations: list[dict]) -> None:
     # Parent-Child 전용
     pc_evals = [e for e in evaluations if e.get("parent_child_linkage")]
     if pc_evals:
-        print("\n[ Parent-Child 연결 (전략 3 전용) ]")
+        print("\n[ Parent-Child 연결 전용 ]")
         for e in pc_evals:
             pc = e["parent_child_linkage"]
             print(f"  부모 {pc['parent_count']}개 / 자식 {pc['child_count']}개"
@@ -270,35 +258,58 @@ def run_compare(cache_path: str, out_dir: str, skip_semantic: bool = False) -> N
     reports = load_reports_cache(cache_path)
     print(f"   리포트 {len(reports)}개\n")
 
-    # ── 클리닝 (청킹 전 노이즈 제거) ─────────────
-    print("── 클리닝 (공백/면책조항/반복줄 제거) ────────────────────")
+    print("── 클리닝 ────────────────────────────────────────────────")
     reports = clean_reports(reports, verbose=True)
 
-    # ── 전략 1 ────────────────────────────────────
-    print("\n── 전략 1: RecursiveCharacterTextSplitter (베이스라인) ──")
+    evals = []
+
+    # ── 전략 1: Recursive ─────────────────────────
+    print("\n── 전략 1: RecursiveCharacterTextSplitter ──────────────")
     r1 = s1.chunk_reports(reports)
     r1.save(str(out_dir_p / "chunking_01_recursive.json"))
+    evals.append(evaluate(r1))
+    print(f"   완료: {r1.chunk_count}개 청크")
 
-    evals = [evaluate(r1)]
-
-    # ── 전략 2: SemanticChunker (OpenAI API 호출) ──
+    # ── 전략 2: Semantic ──────────────────────────
     if skip_semantic:
         print("\n── 전략 2: SemanticChunker ── 스킵 (--no-semantic)")
-        r2 = None
     else:
-        print("\n── 전략 2: SemanticChunker (OpenAI Embedding API 호출) ──")
-        print("   ⚠️  API 비용이 발생합니다. 중단하려면 Ctrl+C")
+        print("\n── 전략 2: SemanticChunker (OpenAI API 호출) ───────────")
+        print("   ⚠️  API 비용 발생. 중단: Ctrl+C")
         try:
             r2 = s2.chunk_reports(reports)
             r2.save(str(out_dir_p / "chunking_02_semantic.json"))
             evals.append(evaluate(r2))
+            print(f"   완료: {r2.chunk_count}개 청크")
         except KeyboardInterrupt:
             print("\n   ⏹ 전략 2 중단됨")
-            r2 = None
         except Exception as e:
             print(f"\n   ❌ 전략 2 실패: {e}")
-            r2 = None
 
+    # ── 전략 3: Hybrid (sentence + semantic + recursive) ──
+    if skip_semantic:
+        print("\n── 전략 3: Hybrid ── 스킵 (--no-semantic)")
+    else:
+        print("\n── 전략 3: Hybrid (sentence/semantic/recursive) ───────")
+        print("   ⚠️  API 비용 발생 (semantic 구간). 중단: Ctrl+C")
+        try:
+            r3 = s3.chunk_reports(reports)
+            r3.save(str(out_dir_p / "chunking_03_semantic.json"))
+            evals.append(evaluate(r3))
+            print(f"   완료: {r3.chunk_count}개 청크")
+        except KeyboardInterrupt:
+            print("\n   ⏹ 전략 3 중단됨")
+        except Exception as e:
+            print(f"\n   ❌ 전략 3 실패: {e}")
+
+    # ── 전략 4: Paragraph ─────────────────────────
+    print("\n── 전략 4: Paragraph (문단 기준) ──────────────────────")
+    r4 = s4.chunk_reports(reports)
+    r4.save(str(out_dir_p / "chunking_04_paragraph.json"))
+    evals.append(evaluate(r4))
+    print(f"   완료: {r4.chunk_count}개 청크")
+
+    # ── 비교표 출력 ───────────────────────────────
     print_comparison(evals)
 
     # JSON 저장
@@ -316,7 +327,6 @@ if __name__ == "__main__":
     CACHE_PATH = str(BASE_DIR / "data" / "loader_metadata" / "reports_cache.json")
     OUT_DIR    = str(BASE_DIR / "data" / "chunks")
 
-    # --no-semantic 플래그: OpenAI API 비용 아낄 때 전략 4 스킵
     skip_semantic = "--no-semantic" in sys.argv
 
     run_compare(CACHE_PATH, OUT_DIR, skip_semantic=skip_semantic)
