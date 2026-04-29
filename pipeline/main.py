@@ -4,7 +4,7 @@ main.py
 
 사전 준비:
     1. .env 파일에 OPENAI_API_KEY=sk-... 설정
-    2. uv run python pipeline/pipeline.py  ← 최초 1회 실행 (ChromaDB 생성)
+    2. uv run python pipeline/ingest.py  ← 최초 1회 실행 (ChromaDB 생성)
 
 실행:
     uv run python pipeline/main.py                       # 인터랙티브 모드
@@ -23,6 +23,8 @@ load_dotenv()
 
 from src.processing.chunking import chunking_01_recursive as c1
 from src.processing.chunking import chunking_02_semantic  as c2
+from src.processing.chunking import chunking_03_hybrid    as c3
+from src.processing.chunking import chunking_04_sentence  as c4
 from src.embedding   import embedding_01_openai    as emb1
 from src.vectorstore import vectorstore_01_chroma  as vs1
 from src.retriever   import retriever_01_ensemble  as ret1
@@ -36,17 +38,19 @@ from src.reportcreator.report_chain import generate_report
 
 VS_BASE_DIR = PROJECT_ROOT / "data" / "vectorstore"
 
-# ── 임베딩 전략 (pipeline.py와 동일하게) ─────
+# ── 청킹 전략 (ingest.py와 동일하게) ─────────
+CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
+# CHUNKING = c2  # 전략 2: SemanticChunker (OpenAI 비용)
+# CHUNKING = c3  # 전략 3: 길이별 자동 분기 (OpenAI 비용)
+# CHUNKING = c4  # 전략 4: 문단 기준 청킹
+
+# ── 임베딩 전략 (ingest.py와 동일하게) ───────
 EMBEDDING = emb1    # 전략 1: OpenAI text-embedding-3-small
 # EMBEDDING = emb2  # 전략 2: (추후 추가)
 
-# ── 벡터스토어 전략 (pipeline.py와 동일하게) ─
+# ── 벡터스토어 전략 (ingest.py와 동일하게) ───
 VECTORSTORE = vs1    # 전략 1: ChromaDB
 # VECTORSTORE = vs2  # 전략 2: (추후 추가)
-
-# ── 청킹 전략 (pipeline.py에서 사용한 것으로) ─
-CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
-# CHUNKING = c2  # 전략 2: SemanticChunker (OpenAI 비용)
 
 # ── 리트리버 전략 (하나만 선택) ──────────────
 RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
@@ -65,7 +69,7 @@ DB_PATH = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME 
 # ── 검색 ──────────────────────────────────────────────────────────────────────
 
 def search(retriever, query: str, top_n: int = 5):
-    """Hybrid Search + Rerank 후 결과 출력"""
+    """retreiver + Rerank 후 결과 출력"""
     candidates = RETRIEVER.retrieve(retriever, query, k=20)
     docs       = RERANKER.rerank(query, candidates, top_n=top_n)
 
@@ -150,11 +154,10 @@ def main():
     print(f"Reranker : {RERANKER.STRATEGY_NAME}")
     print("=" * 60)
 
-    # DB 존재 여부 확인
     if not VECTORSTORE.exists(DB_PATH):
         print(f"\nChromaDB가 없습니다: {DB_PATH}")
         print("먼저 아래 명령어로 데이터를 수집하세요:\n")
-        print("  uv run python pipeline/pipeline.py")
+        print("  uv run python pipeline/ingest.py")
         sys.exit(1)
 
     print(f"\n임베딩 로드 중... ({EMBEDDING.STRATEGY_NAME})")
