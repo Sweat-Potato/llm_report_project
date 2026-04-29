@@ -209,10 +209,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Crawled report data (large files)
-data/reports/
+# Data directory (large files, generated outputs — see README for structure)
+data/
 
-# ChromaDB
-data/chroma/
 # Test files
 tests/
