@@ -28,7 +28,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from langchain.schema import Document
+from langchain.schema import Document, AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 
@@ -59,8 +59,8 @@ _INTENT_PROMPT = ChatPromptTemplate.from_messages([
 
 JSON만 반환 (설명 없이)."""),
 
-    ("human", "하나증권과 키움증권의 3월 반도체 의견 차이를 설명해줘"),
-    ("ai", json.dumps({
+    HumanMessage(content="하나증권과 키움증권의 3월 반도체 의견 차이를 설명해줘"),
+    AIMessage(content=json.dumps({
         "question_type":  "broker_comparison",
         "target_brokers": ["하나증권", "키움증권"],
         "target_sector":  "반도체",
@@ -73,8 +73,8 @@ JSON만 반환 (설명 없이)."""),
         "structure_hint": "두 증권사의 투자의견·목표주가·핵심 논거를 대조하고, 이견의 근본 원인까지 분석",
     }, ensure_ascii=False)),
 
-    ("human", "이번 달 반도체 섹터 투자의견 변화 알려줘"),
-    ("ai", json.dumps({
+    HumanMessage(content="이번 달 반도체 섹터 투자의견 변화 알려줘"),
+    AIMessage(content=json.dumps({
         "question_type":  "timeline",
         "target_brokers": [],
         "target_sector":  "반도체",
@@ -87,8 +87,8 @@ JSON만 반환 (설명 없이)."""),
         "structure_hint": "기간 내 의견 변화 흐름을 시간 순으로 정리하고, 변화를 유발한 시장 배경과 논거를 분석",
     }, ensure_ascii=False)),
 
-    ("human", "각 증권사 목표주가 상향 근거가 뭐야"),
-    ("ai", json.dumps({
+    HumanMessage(content="각 증권사 목표주가 상향 근거가 뭐야"),
+    AIMessage(content=json.dumps({
         "question_type":  "valuation",
         "target_brokers": [],
         "target_sector":  None,
@@ -101,8 +101,8 @@ JSON만 반환 (설명 없이)."""),
         "structure_hint": "증권사별 밸류에이션 방법론과 실적 추정치 변화를 비교하고, 방법론 차이가 목표주가 격차에 미치는 함의 분석",
     }, ensure_ascii=False)),
 
-    ("human", "조선업에서 언급된 리스크 요인 정리해줘"),
-    ("ai", json.dumps({
+    HumanMessage(content="조선업에서 언급된 리스크 요인 정리해줘"),
+    AIMessage(content=json.dumps({
         "question_type":  "risk",
         "target_brokers": [],
         "target_sector":  "조선",
@@ -115,8 +115,8 @@ JSON만 반환 (설명 없이)."""),
         "structure_hint": "리스크를 단기·구조적으로 분류하고, 각 리스크의 발생 조건·영향도·증권사별 온도 차를 서술",
     }, ensure_ascii=False)),
 
-    ("human", "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
-    ("ai", json.dumps({
+    HumanMessage(content="AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
+    AIMessage(content=json.dumps({
         "question_type":  "consensus",
         "target_brokers": [],
         "target_sector":  "AI 인프라",
@@ -157,6 +157,8 @@ def _collect_chunks(
     retriever,
     queries:        list[str],
     target_brokers: list[str],
+    retrieve_fn:    callable,
+    rerank_fn:      callable,
     k_per_query:    int = 15,
     top_n:          int = 12,
 ) -> list[Document]:
@@ -164,7 +166,7 @@ def _collect_chunks(
     seen: set[tuple] = set()
 
     for q in queries:
-        for doc in retrieve(retriever, q, k=k_per_query):
+        for doc in retrieve_fn(retriever, q, k=k_per_query):
             key = (
                 doc.metadata.get("filename",    ""),
                 doc.metadata.get("chunk_index", ""),
@@ -183,7 +185,7 @@ def _collect_chunks(
         rest = [d for d in all_candidates if d not in pinned]
         all_candidates = pinned + rest
 
-    return rerank(queries[0], all_candidates, top_n=top_n)
+    return rerank_fn(queries[0], all_candidates, top_n=top_n)
 
 
 # ── Step 3: 증권사별 컨텍스트 구성 ───────────────────────────────────────────
@@ -485,6 +487,8 @@ def _generate_answer(question: str, context: str, structure_hint: str) -> str:
 def answer_question(
     retriever,
     question:    str,
+    retrieve_fn: callable,
+    rerank_fn:   callable,
     k_per_query: int  = 15,
     top_n:       int  = 12,
     output_dir:  str  = "./data/reports_output",
@@ -519,6 +523,8 @@ def answer_question(
         retriever,
         queries        = intent["search_queries"],
         target_brokers = intent["target_brokers"],
+        retrieve_fn    = retrieve_fn,
+        rerank_fn      = rerank_fn,
         k_per_query    = k_per_query,
         top_n          = top_n,
     )
