@@ -55,8 +55,8 @@ VECTORSTORE = vs1    # 전략 1: ChromaDB
 # VECTORSTORE = vs2  # 전략 2: (추후 추가)
 
 # ── 리트리버 전략 (하나만 선택) ──────────────
-#RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
-RETRIEVER = ret2  # 전략 2: (추후 추가)
+RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
+#RETRIEVER = ret2  # 전략 2: 앙상블 + 증권사 균등 분포
 
 # ── 리랭커 전략 (하나만 선택) ────────────────
 RERANKER = rer1     # 전략 1: BGE Cross-Encoder
@@ -89,7 +89,7 @@ def search(retriever, query: str, top_n: int = 10):
         print(f"\n[{i}] rerank_score: {score}")
         print(f"    증권사: {broker} | 날짜: {date} | 섹터: {sector}")
         print(f"    제목:   {title}")
-        print(f"    내용:   {doc.page_content[:200]}...")
+        print(f"    내용:   {doc.page_content[:300]}...")
 
 
 # ── 인터랙티브 모드 ───────────────────────────────────────────────────────────
