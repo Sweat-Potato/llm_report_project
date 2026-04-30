@@ -16,6 +16,8 @@ Hybrid Search + 증권사별 균등 샘플링
               → 관련없는 증권사 청크 강제 포함 안 함
 """
 
+STRATEGY_NAME = "retriever_02_balenced"
+
 from collections import defaultdict
 from langchain.schema import Document
 from langchain_community.vectorstores import Chroma
