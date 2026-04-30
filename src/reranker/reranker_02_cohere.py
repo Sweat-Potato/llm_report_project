@@ -21,7 +21,7 @@ from langchain.schema import Document
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
 DEFAULT_MODEL   = "rerank-multilingual-v3.0"  # 한국어 지원
-DEFAULT_TOP_N   = 8
+DEFAULT_TOP_N   = 10
 SCORE_THRESHOLD = 0.15   # 이 점수 이하는 완전히 관련없는 문서로 제거
 
 
@@ -148,14 +148,14 @@ if __name__ == "__main__":
     ]
 
     # 리트리버 생성
-    retriever = build_retriever(vectorstore, all_docs, k=20)
+    retriever = build_retriever(vectorstore, all_docs, k=40)
 
     # 후보 검색
     query      = "2차전지 업황 전망"
-    candidates = retrieve(retriever, query, k=20, max_per_firm=2)
+    candidates = retrieve(retriever, query, k=40, max_per_firm=3)
 
     # Cohere rerank
-    docs = rerank(query, candidates, top_n=8)
+    docs = rerank(query, candidates, top_n=10)
 
     print(f"\n[최종 결과] '{query}' → rerank 후 {len(docs)}개")
     for i, doc in enumerate(docs, 1):

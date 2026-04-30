@@ -51,8 +51,8 @@ def korean_tokenizer(text: str) -> list[str]:
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
-BM25_WEIGHT   = 0.3   # 벡터 검색 비중 높임 (의미 기반 강화)
-MAX_PER_FIRM  = 2     # 증권사당 최대 반환 청크 수
+BM25_WEIGHT   = 0.2   # 벡터 검색 비중 높임 (의미 기반 강화)
+MAX_PER_FIRM  = 3     # 증권사당 최대 반환 청크 수
 STRATEGY_NAME = "ensemble_balanced"
 
 
@@ -61,7 +61,7 @@ STRATEGY_NAME = "ensemble_balanced"
 def build_retriever(
     vectorstore: Chroma,
     docs:        list[Document],
-    k:           int   = 20,
+    k:           int   = 40,
     bm25_weight: float = BM25_WEIGHT,
 ) -> EnsembleRetriever:
     bm25_retriever = BM25Retriever.from_documents(
@@ -89,7 +89,7 @@ def build_retriever(
 def retrieve(
     retriever:    EnsembleRetriever,
     query:        str,
-    k:            int = 20,
+    k:            int = 40,
     max_per_firm: int = MAX_PER_FIRM,
 ) -> list[Document]:
     """
@@ -163,7 +163,7 @@ if __name__ == "__main__":
         for text, meta in zip(results["documents"], results["metadatas"])
     ]
 
-    retriever = build_retriever(vectorstore, all_docs, k=20)
+    retriever = build_retriever(vectorstore, all_docs, k=40)
 
     query = "2차전지 업황 전망"
     docs  = retrieve(retriever, query, k=10, max_per_firm=2)

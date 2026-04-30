@@ -59,8 +59,8 @@ VECTORSTORE = vs1    # 전략 1: ChromaDB
 RETRIEVER = ret2  # 전략 2: (추후 추가)
 
 # ── 리랭커 전략 (하나만 선택) ────────────────
-#RERANKER = rer1     # 전략 1: BGE Cross-Encoder
-RERANKER = rer2   # 전략 2: (추후 추가)
+RERANKER = rer1     # 전략 1: BGE Cross-Encoder
+#RERANKER = rer2   # 전략 2: Cohere Cross_Encoder
 
 # ===========================================
 
@@ -70,9 +70,9 @@ DB_PATH = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME 
 
 # ── 검색 ──────────────────────────────────────────────────────────────────────
 
-def search(retriever, query: str, top_n: int = 5):
+def search(retriever, query: str, top_n: int = 10):
     """retreiver + Rerank 후 결과 출력"""
-    candidates = RETRIEVER.retrieve(retriever, query, k=20)
+    candidates = RETRIEVER.retrieve(retriever, query, k=40)
     docs       = RERANKER.rerank(query, candidates, top_n=top_n)
 
     print(f"\n검색어: '{query}'")
@@ -153,8 +153,8 @@ def main():
     parser = argparse.ArgumentParser(description="리서치 리포트 RAG 시스템")
     parser.add_argument("--query",  type=str, default=None, help="청크 검색만")
     parser.add_argument("--ask",    type=str, default=None, help="freeform 분석 리포트 생성")
-    parser.add_argument("--k",      type=int, default=20,   help="Hybrid Search 후보 수")
-    parser.add_argument("--top-n",  type=int, default=8,    help="Reranker 최종 반환 수")
+    parser.add_argument("--k",      type=int, default=40,   help="Hybrid Search 후보 수")
+    parser.add_argument("--top-n",  type=int, default=10,    help="Reranker 최종 반환 수")
     args = parser.parse_args()
 
     print("=" * 60)
