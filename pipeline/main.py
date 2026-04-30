@@ -96,7 +96,11 @@ def search(retriever, query: str, top_n: int = 10):
 
 def ask(retriever, question: str) -> None:
     """freeform_chain 실행 후 결과 출력"""
-    result = answer_question(retriever, question)
+    result = answer_question(
+        retriever, question,
+        retrieve_fn=lambda r, q, k: RETRIEVER.retrieve(r, q, k=k),
+        rerank_fn=lambda q, docs, top_n: RERANKER.rerank(q, docs, top_n=top_n),
+    )
     print("\n" + "=" * 60)
     print(f"유형: {result['question_type']} | 참고 증권사: {', '.join(result['sources'])}")
     print("=" * 60)
