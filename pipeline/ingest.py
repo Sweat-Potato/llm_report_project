@@ -40,9 +40,9 @@ FORCE_RELOAD = False
 # FORCE_RELOAD = True  # 전체 재파싱
 
 # ── 청킹 전략 (하나만 선택) ─────────────────
-CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
+#CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
 # CHUNKING = c2  # 전략 2: SemanticChunker (OpenAI 비용)
-# CHUNKING = c3  # 전략 3: 길이별 자동 분기 (OpenAI 비용)
+CHUNKING = c3  # 전략 3: 길이별 자동 분기 (OpenAI 비용)
 # CHUNKING = c4  # 전략 4: 문단 기준 청킹
 
 # ── 임베딩 전략 (하나만 선택) ────────────────

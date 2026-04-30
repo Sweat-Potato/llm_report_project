@@ -30,6 +30,7 @@ from src.vectorstore import vectorstore_01_chroma  as vs1
 from src.retriever   import retriever_01_ensemble  as ret1
 from src.retriever   import retriever_02_balanced  as ret2
 from src.reranker    import reranker_01_crossencoder as rer1
+from src.reranker    import reranker_02_cohere as rer2
 
 from src.reportcreator.freeform_chain import answer_question
 
@@ -40,9 +41,9 @@ from src.reportcreator.freeform_chain import answer_question
 VS_BASE_DIR = PROJECT_ROOT / "data" / "vectorstore"
 
 # ── 청킹 전략 (ingest.py와 동일하게) ─────────
-CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
+#CHUNKING = c1    # 전략 1: RecursiveCharacterTextSplitter
 # CHUNKING = c2  # 전략 2: SemanticChunker (OpenAI 비용)
-# CHUNKING = c3  # 전략 3: 길이별 자동 분기 (OpenAI 비용)
+CHUNKING = c3  # 전략 3: 길이별 자동 분기 (OpenAI 비용)
 # CHUNKING = c4  # 전략 4: 문단 기준 청킹
 
 # ── 임베딩 전략 (ingest.py와 동일하게) ───────
@@ -54,12 +55,12 @@ VECTORSTORE = vs1    # 전략 1: ChromaDB
 # VECTORSTORE = vs2  # 전략 2: (추후 추가)
 
 # ── 리트리버 전략 (하나만 선택) ──────────────
-RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
-#RETRIEVER = ret2  # 전략 2: (추후 추가)
+#RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
+RETRIEVER = ret2  # 전략 2: (추후 추가)
 
 # ── 리랭커 전략 (하나만 선택) ────────────────
-RERANKER = rer1     # 전략 1: BGE Cross-Encoder
-# RERANKER = rer2   # 전략 2: (추후 추가)
+#RERANKER = rer1     # 전략 1: BGE Cross-Encoder
+RERANKER = rer2   # 전략 2: (추후 추가)
 
 # ===========================================
 

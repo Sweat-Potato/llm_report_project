@@ -73,9 +73,11 @@ def _is_header_footer(line: str) -> bool:
 # 2. 목차
 # ══════════════════════════════════════════════════════
 
-# 명시적 목차 헤더
+# 명시적 목차 헤더 (일반 + 마크다운 형식)
+# 예: "목차", "Contents", "# **Contents**"
 _TOC_START_RE = re.compile(
-    r"^(목\s*차|Contents?|Table\s+of\s+Contents?|INDEX|차\s*례)\s*$",
+    r"^(목\s*차|Contents?|Table\s+of\s+Contents?|INDEX|차\s*례)\s*$"
+    r"|^#+\s*\*{0,2}(목\s*차|Contents?|Table\s+of\s+Contents?|INDEX)\*{0,2}\s*$",
     re.IGNORECASE,
 )
 
@@ -91,6 +93,25 @@ _TOC_ITEM_DOTTED_RE = re.compile(
     r"^.{2,40}(\.{3,}|─{3,}|\-{3,})\s*\d{1,3}\s*$"
 )
 
+# 목차 항목: 마크다운 bold + · · · 페이지번호
+# 예: "**· · · 3pg**", "**· · · 10pg**", "· · · 21pg"
+_TOC_ITEM_MD_RE = re.compile(
+    r"^\*{0,2}[·•\s]*\d{1,3}(pg|p|페이지)?\*{0,2}\s*$",
+    re.IGNORECASE,
+)
+
+# 목차 항목: 로마숫자 + 제목 + 페이지번호
+# 예: "Ⅰ. Summary 3", "Ⅱ. 수요전망 6", "Ⅲ. Memory ..."
+_TOC_ITEM_ROMAN_RE = re.compile(
+    r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴ]+[\.]?\s*.{1,40}(\s+\d{1,3})?\s*$"
+)
+
+# 목차 섹션 레이블
+# 예: "[산업분석]", "[반도체]"
+_TOC_SECTION_RE = re.compile(
+    r"^\[.{2,10}\]\s*$"
+)
+
 
 def _is_toc_item(line: str) -> bool:
     s = line.strip()
@@ -100,13 +121,19 @@ def _is_toc_item(line: str) -> bool:
         return True
     if _TOC_ITEM_DOTTED_RE.match(s):
         return True
+    if _TOC_ITEM_MD_RE.match(s):
+        return True
+    if _TOC_ITEM_ROMAN_RE.match(s):
+        return True
+    if _TOC_SECTION_RE.match(s):
+        return True
     return False
 
 
 def _remove_toc(text: str) -> str:
     """
     목차 블록 제거
-    1. 명시적 헤더(목차/Contents) 이후 항목 제거
+    1. 명시적 헤더(목차/Contents/# **Contents**) 이후 항목 제거
     2. 페이지 번호로 끝나는 줄이 3개 이상 연속이면 묵시적 목차로 판단
     """
     lines  = text.split("\n")

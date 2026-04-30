@@ -1,11 +1,11 @@
 """
-chunking_03_semantic.py
+chunking_03_hybrid.py
 전략 3: 길이별 3단계 청킹 (sentence / semantic / recursive)
 
 특징:
   - 텍스트 길이에 따라 청킹 전략 자동 분기
-    · 3000자 미만  : 문장 단위 청킹 (sentence)
-    · 3000~20000자 : Semantic Chunking (OpenAI 임베딩 기반)
+    · 1000자 미만  : 문장 단위 청킹 (sentence)
+    · 1000~20000자 : Semantic Chunking (OpenAI 임베딩 기반)
     · 20000~40000자: RecursiveCharacterTextSplitter (chunk_size=700)
     · 40000자 초과 : RecursiveCharacterTextSplitter (chunk_size=500)
   - Semantic: 문장 임베딩 유사도 기반 breakpoint 감지
@@ -34,7 +34,7 @@ except ImportError:
 STRATEGY_NAME = "chunking_03_hybrid"
 
 # ── 파라미터 ──────────────────────────────────────
-SHORT_THRESHOLD  = 3000    # 이하: 문장 단위 청킹
+SHORT_THRESHOLD  = 1000    # 이하: 문장 단위 청킹
 LONG_THRESHOLD   = 20000   # 초과: recursive fallback
 MIN_CHUNK_SIZE   = 50      # 이하 청크 제외
 
@@ -206,7 +206,7 @@ if __name__ == "__main__":
 
     BASE_DIR   = Path(__file__).parent.parent.parent.parent
     CACHE_PATH = BASE_DIR / "data" / "loader_metadata" / "reports_cache.json"
-    OUT_PATH   = BASE_DIR / "data" / "chunks" / "chunking_03_semantic.json"
+    OUT_PATH   = BASE_DIR / "data" / "chunks" / "chunking_03_hybrid.json"
 
     if not CACHE_PATH.exists():
         print(f"❌ 캐시 없음: {CACHE_PATH}")
