@@ -28,6 +28,7 @@ from src.processing.chunking import chunking_04_sentence  as c4
 from src.embedding   import embedding_01_openai    as emb1
 from src.vectorstore import vectorstore_01_chroma  as vs1
 from src.retriever   import retriever_01_ensemble  as ret1
+from src.retriever   import retriever_02_balanced  as ret2
 from src.reranker    import reranker_01_crossencoder as rer1
 
 from src.reportcreator.report_chain import generate_report
@@ -54,7 +55,7 @@ VECTORSTORE = vs1    # 전략 1: ChromaDB
 
 # ── 리트리버 전략 (하나만 선택) ──────────────
 RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
-# RETRIEVER = ret2  # 전략 2: (추후 추가)
+#RETRIEVER = ret2  # 전략 2: (추후 추가)
 
 # ── 리랭커 전략 (하나만 선택) ────────────────
 RERANKER = rer1     # 전략 1: BGE Cross-Encoder
