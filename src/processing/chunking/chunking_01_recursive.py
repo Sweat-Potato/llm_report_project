@@ -28,8 +28,8 @@ except ImportError:
 STRATEGY_NAME = "chunking_01_recursive"
 
 # ── 파라미터 ──────────────────────────────────────
-CHUNK_SIZE    = 500   # 청크 최대 문자 수
-CHUNK_OVERLAP = 50    # 청크 간 중복 문자 수
+CHUNK_SIZE    = 600   # 청크 최대 문자 수
+CHUNK_OVERLAP = 90    # 청크 간 중복 문자 수
 
 # 구분자 우선순위 (langchain 노트북 + 금융 리포트 특화)
 SEPARATORS = [

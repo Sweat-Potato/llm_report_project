@@ -9,7 +9,7 @@ main.py
 실행:
     uv run python pipeline/main.py                       # 인터랙티브 모드
     uv run python pipeline/main.py --query "반도체 업황" # 바로 검색
-    uv run python pipeline/main.py --report "AI 반도체"  # 바로 리포트 생성
+    uv run python pipeline/main.py --ask "하나증권과 키움증권 3월 의견 차이"   # freeform
 """
 import sys
 import argparse
@@ -31,7 +31,7 @@ from src.retriever   import retriever_01_ensemble  as ret1
 from src.retriever   import retriever_02_balanced  as ret2
 from src.reranker    import reranker_01_crossencoder as rer1
 
-from src.reportcreator.report_chain import generate_report
+from src.reportcreator.freeform_chain import answer_question
 
 # ===========================================
 #   설정 — 실행할 항목만 남기고 나머지 주석처리
@@ -93,14 +93,29 @@ def search(retriever, query: str, top_n: int = 5):
 
 # ── 인터랙티브 모드 ───────────────────────────────────────────────────────────
 
+def ask(retriever, question: str) -> None:
+    """freeform_chain 실행 후 결과 출력"""
+    result = answer_question(retriever, question)
+    print("\n" + "=" * 60)
+    print(f"유형: {result['question_type']} | 참고 증권사: {', '.join(result['sources'])}")
+    print("=" * 60)
+    print(result["answer"])
+    print("\n...(전체 내용은 data/reports_output/ 폴더를 확인하세요)")
+
+
 def interactive_mode(retriever):
     print("\n" + "=" * 60)
     print("리서치 RAG 시스템 (종료: q)")
     print("-" * 60)
     print("명령어:")
-    print("  search <키워드>   → Hybrid Search + Rerank")
-    print("  report <주제>     → 종합 리포트 생성")
+    print("  search <키워드>   → Hybrid Search + Rerank 청크 확인")
+    print("  ask    <질문>     → freeform 분석 리포트 생성")
     print("  q                 → 종료")
+    print("-" * 60)
+    print("ask 질문 예시:")
+    print("  ask 하나증권과 키움증권의 3월 반도체 의견 차이")
+    print("  ask 조선업에서 언급된 리스크 요인 정리해줘")
+    print("  ask AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야")
     print("=" * 60)
 
     while True:
@@ -119,31 +134,24 @@ def interactive_mode(retriever):
         query = parts[1].strip() if len(parts) > 1 else ""
 
         if not query:
-            print("키워드를 입력해주세요.")
+            print("키워드를 입력해주세요. (예: ask 반도체 업황)")
             continue
 
         if cmd == "search":
             search(retriever, query)
-        elif cmd == "report":
-            report = generate_report(
-                retriever,
-                query,
-                retrieve_fn = RETRIEVER.retrieve,
-                rerank_fn   = RERANKER.rerank,
-            )
-            print("\n" + "=" * 60)
-            print(report[:1000])
-            print("\n...(전체 내용은 data/reports_output/ 폴더를 확인하세요)")
+        elif cmd == "ask":
+            ask(retriever, query)
         else:
-            search(retriever, user_input)
+            # 명령어 없이 바로 입력하면 ask로 처리
+            ask(retriever, user_input)
 
 
 # ── 메인 ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="리서치 리포트 RAG 시스템")
-    parser.add_argument("--query",  type=str, default=None, help="바로 검색")
-    parser.add_argument("--report", type=str, default=None, help="바로 리포트 생성")
+    parser.add_argument("--query",  type=str, default=None, help="청크 검색만")
+    parser.add_argument("--ask",    type=str, default=None, help="freeform 분석 리포트 생성")
     parser.add_argument("--k",      type=int, default=20,   help="Hybrid Search 후보 수")
     parser.add_argument("--top-n",  type=int, default=8,    help="Reranker 최종 반환 수")
     args = parser.parse_args()
@@ -179,16 +187,8 @@ def main():
 
     if args.query:
         search(retriever, args.query, top_n=args.top_n)
-    elif args.report:
-        report = generate_report(
-            retriever,
-            args.report,
-            retrieve_fn = RETRIEVER.retrieve,
-            rerank_fn   = RERANKER.rerank,
-            k           = args.k,
-            top_n       = args.top_n,
-        )
-        print("\n" + report)
+    elif args.ask:
+        ask(retriever, args.ask)
     else:
         interactive_mode(retriever)
 

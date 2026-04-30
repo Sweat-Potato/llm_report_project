@@ -32,8 +32,8 @@ from langchain.schema import Document
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 
-from src.retriever.ensemble_retriever import retrieve
-from src.reranker.reranker import rerank
+from src.retriever.retriever_01_ensemble import retrieve
+from src.reranker.reranker_01_crossencoder import rerank
 
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
