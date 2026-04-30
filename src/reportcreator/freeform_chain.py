@@ -32,7 +32,8 @@ from langchain.schema import Document, AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 
-# retrieve_fn, rerank_fn 은 main.py / app.py 에서 주입받음
+from src.retriever.retriever_01_ensemble import retrieve
+from src.reranker.reranker_01_crossencoder import rerank
 
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
