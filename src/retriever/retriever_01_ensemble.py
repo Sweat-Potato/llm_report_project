@@ -8,6 +8,7 @@ Ensemble → 두 결과를 가중치로 합산
 
 한국어 형태소 분석(kiwipiepy)으로 BM25 토크나이징 품질 개선:
 - "반도체업황"→["반도체","업황"], 조사·어미 제거
+- 금융 범용 단어(업황, 전망, 분석 등) 제외 → 노이즈 감소
 """
 STRATEGY_NAME = "retriever_01_ensemble"
 
@@ -22,7 +23,22 @@ from langchain.retrievers import EnsembleRetriever
 # 조사(JX,JC,JK*), 어미(EF,EC,ETM), 접미사(XS*) 제거 → 의미 있는 형태소만 남김
 _STOP_TAGS = {"JX", "JC", "JKS", "JKO", "JKG", "JKB", "JKV", "JKQ",
               "EF", "EC", "ETM", "ETN", "XSV", "XSA", "XSN", "SF", "SP", "SS"}
- 
+
+# 금융 리포트에서 너무 범용적으로 사용되어 노이즈가 되는 단어
+# → BM25 검색 시 제외하여 섹터 무관 청크 유입 방지
+FINANCIAL_STOP_WORDS = {
+    # 상태/방향
+    "업황", "전망", "분석", "투자", "의견",
+    "시장", "성장", "실적", "수익", "이익",
+    "예상", "전년", "대비", "기준", "수준",
+    "증가", "감소", "상승", "하락", "유지",
+    "긍정", "부정", "중립", "판단", "추정",
+    # 보고서 공통 표현
+    "리포트", "보고서", "리서치", "센터", "증권",
+    "투자자", "주가", "목표", "영업", "매출",
+    "분기", "연간", "반기", "전분기", "전년도",
+}
+
 _kiwi = None
 
 def _get_kiwi():
@@ -38,9 +54,17 @@ def korean_tokenizer(text: str) -> list[str]:
     try:
         kiwi   = _get_kiwi()
         tokens = kiwi.tokenize(text)
-        return [t.form for t in tokens if t.tag not in _STOP_TAGS and len(t.form) > 1]
+        return [
+            t.form for t in tokens
+            if t.tag not in _STOP_TAGS
+            and len(t.form) > 1
+            and t.form not in FINANCIAL_STOP_WORDS  # 금융 범용 단어 제외
+        ]
     except Exception:
-        return text.split()
+        return [
+            w for w in text.split()
+            if w not in FINANCIAL_STOP_WORDS
+        ]
 
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
