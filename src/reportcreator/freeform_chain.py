@@ -71,7 +71,7 @@ JSON만 반환 (설명 없이)."""),
             "반도체 섹터 목표주가 업황 전망",
         ],
         "structure_hint": "두 증권사의 투자의견·목표주가·핵심 논거를 대조하고, 이견의 근본 원인까지 분석",
-    }, ensure_ascii=False).replace("{", "{{").replace("}", "}}")),
+    }, ensure_ascii=False)),
 
     ("human", "이번 달 반도체 섹터 투자의견 변화 알려줘"),
     ("ai", json.dumps({
@@ -85,7 +85,7 @@ JSON만 반환 (설명 없이)."""),
             "반도체 업황 회복 전망",
         ],
         "structure_hint": "기간 내 의견 변화 흐름을 시간 순으로 정리하고, 변화를 유발한 시장 배경과 논거를 분석",
-    }, ensure_ascii=False).replace("{", "{{").replace("}", "}}")),
+    }, ensure_ascii=False)),
 
     ("human", "각 증권사 목표주가 상향 근거가 뭐야"),
     ("ai", json.dumps({
@@ -99,7 +99,7 @@ JSON만 반환 (설명 없이)."""),
             "실적 추정치 상향 목표주가 변화",
         ],
         "structure_hint": "증권사별 밸류에이션 방법론과 실적 추정치 변화를 비교하고, 방법론 차이가 목표주가 격차에 미치는 함의 분석",
-    }, ensure_ascii=False).replace("{", "{{").replace("}", "}}")),
+    }, ensure_ascii=False)),
 
     ("human", "조선업에서 언급된 리스크 요인 정리해줘"),
     ("ai", json.dumps({
@@ -113,7 +113,7 @@ JSON만 반환 (설명 없이)."""),
             "조선 섹터 하방 시나리오",
         ],
         "structure_hint": "리스크를 단기·구조적으로 분류하고, 각 리스크의 발생 조건·영향도·증권사별 온도 차를 서술",
-    }, ensure_ascii=False).replace("{", "{{").replace("}", "}}")),
+    }, ensure_ascii=False)),
 
     ("human", "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
     ("ai", json.dumps({
@@ -127,7 +127,7 @@ JSON만 반환 (설명 없이)."""),
             "AI 전력 냉각 네트워크 장비 성장",
         ],
         "structure_hint": "공통 논거를 항목별로 수치와 함께 정리하고, 컨센서스가 형성된 배경과 아직 이견이 있는 영역을 구분",
-    }, ensure_ascii=False).replace("{", "{{").replace("}", "}}")),
+    }, ensure_ascii=False)),
 
     ("human", "{question}"),
 ])
