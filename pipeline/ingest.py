@@ -28,8 +28,8 @@ from src.vectorstore import vectorstore_01_chroma as vs1
 # ===========================================
 
 # ── 데이터 경로 ──────────────────────────────
-# REPORTS_DIR   = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry"
-REPORTS_DIR = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry" / "DS투자증권"  # DS만 테스트
+REPORTS_DIR   = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry"
+# REPORTS_DIR = PROJECT_ROOT / "data" / "reports" / "reports_naver_industry" / "DS투자증권"  # DS만 테스트
 
 CACHE_PATH  = PROJECT_ROOT / "data" / "loader_metadata" / "reports_cache.json"
 CHUNKS_DIR  = PROJECT_ROOT / "data" / "chunks"
