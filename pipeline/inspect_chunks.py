@@ -26,9 +26,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.loader  import load_pdf, parse_filename_meta
-from src.cleaner import clean_documents
-from src.chunker import chunk_documents
+from test.loader  import load_pdf, parse_filename_meta
+from test.cleaner import clean_documents
+from test.chunker import chunk_documents
 
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
