@@ -449,11 +449,20 @@ def generate_report(
     final_report            = step_generate_final_report(topic, summaries, consensus, differences, insights)
 
     # 저장
+    import json
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    safe_topic   = re.sub(r'[\\/:*?"<>|]', "_", topic)
-    output_path  = Path(output_dir) / f"report_{safe_topic}_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
-    output_path.write_text(final_report, encoding="utf-8")
-    print(f"\n리포트 저장 완료: {output_path}")
+    safe_topic = re.sub(r'[\\/:*?"<>|]', "_", topic)
+    base       = Path(output_dir) / f"report_{safe_topic}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+
+    base.with_suffix(".md").write_text(final_report, encoding="utf-8")
+
+    sources_data = [
+        {"content": d.page_content, **d.metadata} for d in docs
+    ]
+    base.with_name(base.name + "_sources.json").write_text(
+        json.dumps(sources_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"\n리포트 저장 완료: {base.with_suffix('.md')}")
     print("=" * 60)
 
     return final_report

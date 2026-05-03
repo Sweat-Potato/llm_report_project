@@ -554,13 +554,22 @@ def answer_question(
     print("  -> 완료")
 
     if save:
+        import json
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         safe   = re.sub(r'[\\/:*?"<>|]', "_", question[:40])
         ts     = datetime.now().strftime("%Y%m%d_%H%M")
-        path   = Path(output_dir) / f"freeform_{safe}_{ts}.md"
+        base   = Path(output_dir) / f"freeform_{safe}_{ts}"
+
         header = f"# Q: {question}\n\n> 참고 증권사: {', '.join(sources)}\n\n---\n\n"
-        path.write_text(header + answer, encoding="utf-8")
-        print(f"  저장 완료: {path}")
+        (base.with_suffix(".md")).write_text(header + answer, encoding="utf-8")
+
+        sources_data = [
+            {"content": d.page_content, **d.metadata} for d in docs
+        ]
+        (base.with_name(base.name + "_sources.json")).write_text(
+            json.dumps(sources_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"  저장 완료: {base.with_suffix('.md')}")
 
     print("=" * 60)
 
