@@ -52,7 +52,6 @@ from langchain.prompts import ChatPromptTemplate
 from src.retriever.router import select_and_retrieve as _router_select_and_retrieve
 from src.reranker.reranker_01_crossencoder import rerank as _default_rerank
 
-
 # ── LLM ──────────────────────────────────────────────────────────────────────
 
 def _llm_fast()   -> ChatOpenAI: return ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -282,6 +281,7 @@ def _collect_chunks(
     k_per_query:    int = 15,
     top_n:          int = 12,
     intent:         str = "ensemble",
+    target_period:  str = None,
 ) -> list[Document]:
     _rerank = rerank_fn if rerank_fn else _default_rerank
     all_candidates: list[Document] = []
@@ -310,8 +310,18 @@ def _collect_chunks(
             if any(nb in _get_firm(d).replace(" ", "")
                    for nb in normalized)
         ]
-        rest = [d for d in all_candidates if d not in pinned]
-        all_candidates = pinned + rest
+        all_candidates = pinned 
+
+    # 기존 증권사 필터링 아래에 추가
+    if target_period:
+        filtered = [
+            d for d in all_candidates
+            if d.metadata.get("report_date", "").startswith(target_period)
+        ]
+        if filtered:  # 필터링 결과 없으면 전체 유지
+            all_candidates = filtered
+        else:
+            print(f"  ⚠️ {target_period} 기간 청크 없음 → 전체 검색 유지")
 
     # ✅ rerank 쿼리: 단일 첫 번째 쿼리 대신 모든 쿼리를 결합해 의미 커버리지를 확보
     combined_query = " ".join(queries)
@@ -1612,8 +1622,8 @@ def build_disclaimer(
 def answer_question(
     retrievers,
     question:    str,
-    retrieve_fn: None,
-    rerank_fn:   None,
+    retrieve_fn= None,
+    rerank_fn=  None,
     k_per_query: int  = 15,
     top_n:       int  = 12,
     # other 경로(풀 리포트)에서 사용할 검색 파라미터
@@ -1666,6 +1676,7 @@ def answer_question(
         k_per_query    = k_full if is_other else k_per_query,
         top_n          = top_n_full if is_other else top_n,
         intent         = _intent,
+        target_period  = intent.get("target_period"),
     )
     print(f"  → {len(docs)}개 청크 확보")
 
@@ -1722,7 +1733,7 @@ def answer_question(
     # ── 저장 ──────────────────────────────────────────────────────────
     if save:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        safe   = re.sub(r'[\\/:*?"<>|]', "_", question[:40])
+        safe   = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", question[:40]).strip()
         ts     = datetime.now().strftime("%Y%m%d_%H%M")
         prefix = "fullreport" if is_other else "freeform"
         base   = Path(output_dir) / f"{prefix}_{safe}_{ts}"
@@ -1751,4 +1762,4 @@ def answer_question(
         "sources":       sources,
         "chunk_count":   len(docs),
         "mode":          mode,
-    }
+        "docs":          docs,
