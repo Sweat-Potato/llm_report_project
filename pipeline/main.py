@@ -94,7 +94,6 @@ def ask(retrievers, question: str) -> None:
     result = answer_question(
         retrievers,
         question,
-        retrieve_fn=ret_router.retrieve,
         rerank_fn=RERANKER.rerank,
     )
     print("\n" + "=" * 60)
