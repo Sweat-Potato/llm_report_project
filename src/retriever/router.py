@@ -253,9 +253,10 @@ def retrieve(
 
     동작:
     1. LLM으로 의도 분류 + 증권사명 추출 + 정규화
-    2. 특정 증권사 언급 시 → 해당 증권사 청크만 검색
-    3. 비교 쿼리 → retriever_02_balanced
-       일반 쿼리 → retriever_01_ensemble
+    2. 의도에 따라 리트리버 선택 (앙상블 내부에서 BM25+벡터 검색)
+       비교 쿼리 → retriever_02_balanced (증권사별 균등)
+       일반 쿼리 → retriever_01_ensemble (점수 기반)
+    3. 특정 증권사 언급 시 → 검색 결과에서 해당 증권사만 필터링
     """
     ret1_instance, ret2_instance, all_docs = retrievers
 
@@ -265,57 +266,22 @@ def retrieve(
     if firms:
         print(f"  언급된 증권사: {firms}")
 
-    # 2. 특정 증권사 언급 시 → 해당 증권사 문서만 필터링 후 검색
-    if firms:
-        print(f"  → 메타데이터 필터링: {firms}")
-        firm_docs = _filter_by_firms(all_docs, firms)
-        print(f"  → 필터링 결과: {len(firm_docs)}개 청크")
-
-        from langchain_community.retrievers import BM25Retriever
-        from collections import defaultdict
-
-        bm25 = BM25Retriever.from_documents(
-            firm_docs,
-            k=k,
-            preprocess_func=ret1.korean_tokenizer,
-        )
-
-        raw = bm25.invoke(query)
-
-        # 중복 제거
-        seen = set()
-        result = []
-        for doc in raw:
-            key = (
-                doc.metadata.get("filename", "") or doc.metadata.get("pdf_path", ""),
-                doc.metadata.get("chunk_index", ""),
-            )
-            if key not in seen:
-                seen.add(key)
-                result.append(doc)
-
-        # 비교 쿼리면 균등 샘플링 적용
-        if intent == "balanced":
-            firm_counts = defaultdict(int)
-            balanced = []
-            for doc in result:
-                firm = doc.metadata.get("source_firm", "기타")
-                if firm_counts[firm] < ret2.MAX_PER_FIRM:
-                    balanced.append(doc)
-                    firm_counts[firm] += 1
-                if len(balanced) >= k:
-                    break
-            return balanced
-
-        return result[:k]
-
-    # 3. 증권사 미언급 → 일반 리트리버 선택
+    # 2. 리트리버 선택 (앙상블 내부에서 BM25+벡터 검색)
     if intent == "balanced":
         print(f"  → retriever_02_balanced 사용 (증권사별 균등 샘플링)")
-        return ret2.retrieve(ret2_instance, query, k=k)
+        raw = ret2.retrieve(ret2_instance, query, k=k)
     else:
         print(f"  → retriever_01_ensemble 사용 (점수 기반)")
-        return ret1.retrieve(ret1_instance, query, k=k)
+        raw = ret1.retrieve(ret1_instance, query, k=k)
+
+    # 3. 특정 증권사 언급 시 → 검색 결과에서 필터링
+    if firms:
+        print(f"  → 증권사 필터링: {firms}")
+        result = _filter_by_firms(raw, firms)
+        print(f"  → 필터링 결과: {len(result)}개 청크")
+        return result
+
+    return raw
 
 
 # ── 단독 실행 (테스트) ────────────────────────────────────────────────────────
@@ -324,37 +290,27 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
 
-    # ── 실제 검색 테스트 ──────────────────────────────
-    print("\n" + "=" * 65)
-    print("실제 검색 테스트")
-    print("=" * 65)
-
-    from pathlib import Path
-    from src.embedding.embedding_01_openai import get_embeddings
-    from src.vectorstore.vectorstore_01_chroma import load
-
-    PROJECT_ROOT = Path(__file__).parent.parent.parent
-    DB_PATH = str(PROJECT_ROOT / "data" / "vectorstore" / "chroma" / "openai_text-embedding-3-small" / "chunking_03_hybrid")
-
-    embeddings  = get_embeddings()
-    vectorstore = load(DB_PATH, embeddings)
-
-    from langchain.schema import Document as LC_Document
-    results  = vectorstore.get(include=["documents", "metadatas"])
-    all_docs = [
-        LC_Document(page_content=text, metadata=meta)
-        for text, meta in zip(results["documents"], results["metadatas"])
+    test_queries = [
+        "반도체 업황 전망",
+        "증권사별 2차전지 투자 의견 비교",
+        "삼성전자 목표주가",
+        "각 증권사 반도체 시각이 어때",
+        "HBM 수요 현황",
+        "반도체에 대한 다양한 관점 알려줘",
+        "하나증권이랑 대신증권의 반도체 업황 비교해줘",
+        "대신증권 한화증권의 반도체 업황 비교해줘",
+        "DS투자증권은 반도체를 어떻게 봐?",
+        "키움 2차전지 리포트 보여줘",
+        "iM증권이랑 교보 비교",
+        "유안타증권 SK증권 IBK투자증권 반도체 의견",
+        "한화 리포트에서 ESS 언급된 내용",
+        "대신 하나 반도체 비교해줘",
     ]
 
-    retrievers = build_retriever(vectorstore, all_docs, k=40)
-
-    query = "대신증권 한화증권의 반도체 업황 비교해줘"
-    docs  = retrieve(retrievers, query, k=20)
-
-    print(f"\n[검색 결과] '{query}' → {len(docs)}개")
-    for i, doc in enumerate(docs, 1):
-        firm = doc.metadata.get("source_firm", "-")
-        date = doc.metadata.get("report_date", "-")
-        title = doc.metadata.get("title", "")[:40]
-        print(f"\n[{i}] {firm} | {date} | {title}")
-        print(f"    {doc.page_content[:150]}...")
+    print("=" * 65)
+    print("쿼리 분석 테스트 (의도 + 증권사 추출 + 정규화)")
+    print("=" * 65)
+    for query in test_queries:
+        intent, firms = analyze_query(query)
+        firms_str = ", ".join(firms) if firms else "없음"
+        print(f"  [{intent:10}] 증권사: {firms_str:30} | {query}")
