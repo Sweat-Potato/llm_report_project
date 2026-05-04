@@ -28,8 +28,8 @@ try:
     from .base import ChunkingResult, Chunk, load_reports_cache
     from . import chunking_01_recursive as s1
     from . import chunking_02_semantic  as s2
-    from . import chunking_03_semantic  as s3
-    from . import chunking_04_paragraph as s4
+    from . import chunking_03_hybrid    as s3
+    from . import chunking_04_sentence  as s4
     from src.processing.cleaner import clean_reports
 except ImportError:
     import sys
@@ -38,8 +38,8 @@ except ImportError:
     from src.processing.chunking.base import ChunkingResult, Chunk, load_reports_cache
     from src.processing.chunking import chunking_01_recursive as s1
     from src.processing.chunking import chunking_02_semantic  as s2
-    from src.processing.chunking import chunking_03_semantic  as s3
-    from src.processing.chunking import chunking_04_paragraph as s4
+    from src.processing.chunking import chunking_03_hybrid    as s3
+    from src.processing.chunking import chunking_04_sentence  as s4
     from src.processing.cleaner import clean_reports
 
 # ─────────────────────────────────────────────────
@@ -294,7 +294,7 @@ def run_compare(cache_path: str, out_dir: str, skip_semantic: bool = False) -> N
         print("   ⚠️  API 비용 발생 (semantic 구간). 중단: Ctrl+C")
         try:
             r3 = s3.chunk_reports(reports)
-            r3.save(str(out_dir_p / "chunking_03_semantic.json"))
+            r3.save(str(out_dir_p / "chunking_03_hybrid.json"))
             evals.append(evaluate(r3))
             print(f"   완료: {r3.chunk_count}개 청크")
         except KeyboardInterrupt:
@@ -305,7 +305,7 @@ def run_compare(cache_path: str, out_dir: str, skip_semantic: bool = False) -> N
     # ── 전략 4: Paragraph ─────────────────────────
     print("\n── 전략 4: Paragraph (문단 기준) ──────────────────────")
     r4 = s4.chunk_reports(reports)
-    r4.save(str(out_dir_p / "chunking_04_paragraph.json"))
+    r4.save(str(out_dir_p / "chunking_04_sentence.json"))
     evals.append(evaluate(r4))
     print(f"   완료: {r4.chunk_count}개 청크")
 

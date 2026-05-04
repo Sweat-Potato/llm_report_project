@@ -4,13 +4,14 @@ cleaner.py
 
 처리 순서:
   0. HTML 태그 제거
-  1. 머리글 / 바닥글 제거
+  1. 머리글 / 바닥글 제거 (마크다운 헤딩/볼드 포함)
   2. 목차 블록 제거
-  3. 그림/표 캡션 + 자료 출처 제거
+  3. 그림/표 캡션 + 자료 출처 제거 (마크다운 볼드 포함)
   4. 표 / 차트 / 그래프 데이터 제거
   5. 법적 고지 문구 제거
   6. 페이지 번호 제거
-  7. 공백 / 줄바꿈 정리
+  7. 마크다운 문법 기호 제거 (#, **, *, ---)
+  8. 공백 / 줄바꿈 정리
 
 사용법:
     # 페이지 단위 Document 리스트 정제 (Loader와 연동 시)
@@ -43,6 +44,18 @@ def _remove_html_tags(text: str) -> str:
 
 
 # ══════════════════════════════════════════════════════
+# 마크다운 인라인 기호 제거 헬퍼 (패턴 매칭 전처리용)
+# ══════════════════════════════════════════════════════
+
+def _strip_md_inline(s: str) -> str:
+    """헤딩/볼드/이탤릭 마커를 벗겨낸 plain text 반환 (패턴 매칭용)."""
+    s = re.sub(r"^#{1,6}\s*", "", s)
+    s = re.sub(r"\*{1,3}([^*]*)\*{1,3}", r"\1", s)
+    s = re.sub(r"_{1,2}([^_]*)_{1,2}", r"\1", s)
+    return s.strip()
+
+
+# ══════════════════════════════════════════════════════
 # 1. 머리글 / 바닥글
 # ══════════════════════════════════════════════════════
 
@@ -66,7 +79,13 @@ def _is_header_footer(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
-    return any(p.match(s) for p in _HEADER_FOOTER_RE)
+    if any(p.match(s) for p in _HEADER_FOOTER_RE):
+        return True
+    # 마크다운 헤딩/볼드로 감싼 경우도 체크 (예: ## 기업분석, # **하나증권**)
+    s_plain = _strip_md_inline(s)
+    if s_plain != s:
+        return any(p.match(s_plain) for p in _HEADER_FOOTER_RE)
+    return False
 
 
 # ══════════════════════════════════════════════════════
@@ -215,16 +234,18 @@ def _remove_captions_and_sources(text: str) -> str:
         if not s:
             result.append(line)
             continue
-        if _CAPTION_RE.match(s):
+        s_plain = _strip_md_inline(s)
+        # 마크다운 볼드/헤딩으로 감싼 경우도 체크 (예: **그림 1. ...**, **자료:** ...)
+        if _CAPTION_RE.match(s) or _CAPTION_RE.match(s_plain):
             continue
-        if _BRACKET_CAPTION_RE.match(s):
+        if _BRACKET_CAPTION_RE.match(s) or _BRACKET_CAPTION_RE.match(s_plain):
             continue
-        if _SOURCE_RE.match(s):
+        if _SOURCE_RE.match(s) or _SOURCE_RE.match(s_plain):
             continue
-        if _TABLE_HEADER_RE.match(s):
+        if _TABLE_HEADER_RE.match(s) or _TABLE_HEADER_RE.match(s_plain):
             continue
         # 단위 표시 줄: "(단위: 십억원)" 등
-        if re.match(r"^\(단위\s*[:：][^)]{1,20}\)\s*$", s):
+        if re.match(r"^\(단위\s*[:：][^)]{1,20}\)\s*$", s) or re.match(r"^\(단위\s*[:：][^)]{1,20}\)\s*$", s_plain):
             continue
         # 단독 연도/분기 코드: "2026E", "1Q25", "2027F" 등
         if re.fullmatch(r"\d{4}[EF]?|\d[QH]\d{2}", s):
@@ -395,6 +416,25 @@ def _remove_page_numbers(text: str) -> str:
 
 
 # ══════════════════════════════════════════════════════
+# 7. 마크다운 문법 기호 제거 (pymupdf4llm 출력 정제)
+# ══════════════════════════════════════════════════════
+
+def _strip_markdown_syntax(text: str) -> str:
+    """콘텐츠 정제가 끝난 후 남은 마크다운 문법 기호를 plain text로 변환."""
+    # 헤딩 마커 (# ## ### 등 → 내용만)
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # 볼드/이탤릭 (***x***, **x**, *x*)
+    text = re.sub(r"\*{3}([^*\n]*)\*{3}", r"\1", text)
+    text = re.sub(r"\*{2}([^*\n]*)\*{2}", r"\1", text)
+    text = re.sub(r"\*([^*\n]+)\*",       r"\1", text)
+    # 수평선 (---, ***, ___ 단독 줄)
+    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+    # 인라인 코드 (`code`)
+    text = re.sub(r"`([^`\n]+)`", r"\1", text)
+    return text
+
+
+# ══════════════════════════════════════════════════════
 # 메인 정제 함수
 # ══════════════════════════════════════════════════════
 
@@ -426,10 +466,13 @@ def clean_page(text: str) -> str:
     # 6. 페이지 번호
     text = _remove_page_numbers(text)
 
-    # 7. 공백/줄바꿈 정리
+    # 7. 마크다운 문법 기호 제거 (pymupdf4llm 출력 후처리)
+    text = _strip_markdown_syntax(text)
+
+    # 8. 공백/줄바꿈 정리
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
-    
+
     return text.strip()
 
 

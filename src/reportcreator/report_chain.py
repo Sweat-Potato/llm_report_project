@@ -52,7 +52,7 @@ def step_retrieve(
 
     broker_counts = {}
     for doc in docs:
-        b = doc.metadata.get("broker", "unknown")
+        b = doc.metadata.get("source_firm", "unknown")
         broker_counts[b] = broker_counts.get(b, 0) + 1
     print(f"  → 증권사 분포: {dict(sorted(broker_counts.items(), key=lambda x: -x[1]))}")
 
@@ -100,7 +100,7 @@ def step_summarize_by_broker(docs: list[Document], topic: str) -> dict[str, str]
     broker_titles: dict[str, list[str]] = {}
 
     for doc in docs:
-        broker = doc.metadata.get("broker", "unknown")
+        broker = doc.metadata.get("source_firm", "unknown")
         title  = doc.metadata.get("title", "")
         broker_chunks.setdefault(broker, []).append(doc.page_content)
         if title and title not in broker_titles.get(broker, []):
@@ -449,11 +449,20 @@ def generate_report(
     final_report            = step_generate_final_report(topic, summaries, consensus, differences, insights)
 
     # 저장
+    import json
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    safe_topic   = re.sub(r'[\\/:*?"<>|]', "_", topic)
-    output_path  = Path(output_dir) / f"report_{safe_topic}_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
-    output_path.write_text(final_report, encoding="utf-8")
-    print(f"\n리포트 저장 완료: {output_path}")
+    safe_topic = re.sub(r'[\\/:*?"<>|]', "_", topic)
+    base       = Path(output_dir) / f"report_{safe_topic}_{datetime.now().strftime('%Y%m%d_%H%M')}"
+
+    base.with_suffix(".md").write_text(final_report, encoding="utf-8")
+
+    sources_data = [
+        {"content": d.page_content, **d.metadata} for d in docs
+    ]
+    base.with_name(base.name + "_sources.json").write_text(
+        json.dumps(sources_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"\n리포트 저장 완료: {base.with_suffix('.md')}")
     print("=" * 60)
 
     return final_report

@@ -27,8 +27,7 @@ from src.processing.chunking import chunking_03_hybrid    as c3
 from src.processing.chunking import chunking_04_sentence  as c4
 from src.embedding   import embedding_01_openai    as emb1
 from src.vectorstore import vectorstore_01_chroma  as vs1
-from src.retriever   import retriever_01_ensemble  as ret1
-from src.retriever   import retriever_02_balanced  as ret2
+from src.retriever   import router as ret_router   # ← 라우터 사용
 from src.reranker    import reranker_01_crossencoder as rer1
 from src.reranker    import reranker_02_cohere as rer2
 
@@ -54,10 +53,6 @@ EMBEDDING = emb1    # 전략 1: OpenAI text-embedding-3-small
 VECTORSTORE = vs1    # 전략 1: ChromaDB
 # VECTORSTORE = vs2  # 전략 2: (추후 추가)
 
-# ── 리트리버 전략 (하나만 선택) ──────────────
-RETRIEVER = ret1    # 전략 1: BM25 + Vector Ensemble
-#RETRIEVER = ret2  # 전략 2: 앙상블 + 증권사 균등 분포
-
 # ── 리랭커 전략 (하나만 선택) ────────────────
 RERANKER = rer1     # 전략 1: BGE Cross-Encoder
 #RERANKER = rer2   # 전략 2: Cohere Cross_Encoder
@@ -70,9 +65,9 @@ DB_PATH = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME 
 
 # ── 검색 ──────────────────────────────────────────────────────────────────────
 
-def search(retriever, query: str, top_n: int = 10):
-    """retreiver + Rerank 후 결과 출력"""
-    candidates = RETRIEVER.retrieve(retriever, query, k=40)
+def search(retrievers, query: str, top_n: int = 10):
+    """router → retriever 자동 선택 → Rerank 후 결과 출력"""
+    candidates = ret_router.retrieve(retrievers, query, k=40)
     docs       = RERANKER.rerank(query, candidates, top_n=top_n)
 
     print(f"\n검색어: '{query}'")
@@ -94,9 +89,14 @@ def search(retriever, query: str, top_n: int = 10):
 
 # ── 인터랙티브 모드 ───────────────────────────────────────────────────────────
 
-def ask(retriever, question: str) -> None:
+def ask(retrievers, question: str) -> None:
     """freeform_chain 실행 후 결과 출력"""
-    result = answer_question(retriever, question)
+    result = answer_question(
+        retrievers,
+        question,
+        retrieve_fn=ret_router.retrieve,
+        rerank_fn=RERANKER.rerank,
+    )
     print("\n" + "=" * 60)
     print(f"유형: {result['question_type']} | 참고 증권사: {', '.join(result['sources'])}")
     print("=" * 60)
@@ -104,7 +104,7 @@ def ask(retriever, question: str) -> None:
     print("\n...(전체 내용은 data/reports_output/ 폴더를 확인하세요)")
 
 
-def interactive_mode(retriever):
+def interactive_mode(retrievers):
     print("\n" + "=" * 60)
     print("리서치 RAG 시스템 (종료: q)")
     print("-" * 60)
@@ -139,12 +139,12 @@ def interactive_mode(retriever):
             continue
 
         if cmd == "search":
-            search(retriever, query)
+            search(retrievers, query)
         elif cmd == "ask":
-            ask(retriever, query)
+            ask(retrievers, query)
         else:
             # 명령어 없이 바로 입력하면 ask로 처리
-            ask(retriever, user_input)
+            ask(retrievers, user_input)
 
 
 # ── 메인 ──────────────────────────────────────────────────────────────────────
@@ -154,13 +154,13 @@ def main():
     parser.add_argument("--query",  type=str, default=None, help="청크 검색만")
     parser.add_argument("--ask",    type=str, default=None, help="freeform 분석 리포트 생성")
     parser.add_argument("--k",      type=int, default=40,   help="Hybrid Search 후보 수")
-    parser.add_argument("--top-n",  type=int, default=10,    help="Reranker 최종 반환 수")
+    parser.add_argument("--top-n",  type=int, default=10,   help="Reranker 최종 반환 수")
     args = parser.parse_args()
 
     print("=" * 60)
     print("리서치 리포트 RAG 시스템")
     print(f"DB       : {DB_PATH}")
-    print(f"Retriever: {RETRIEVER.STRATEGY_NAME}")
+    print(f"Retriever: router (쿼리 의도에 따라 자동 선택)")
     print(f"Reranker : {RERANKER.STRATEGY_NAME}")
     print("=" * 60)
 
@@ -175,7 +175,7 @@ def main():
     print(f"벡터스토어 로드 중... ({VECTORSTORE.STRATEGY_NAME})")
     vectorstore = VECTORSTORE.load(DB_PATH, embeddings)
 
-    print(f"리트리버 인덱스 구성 중... ({RETRIEVER.STRATEGY_NAME})")
+    print(f"리트리버 인덱스 구성 중...")
     results  = vectorstore.get(include=["documents", "metadatas"])
     from langchain.schema import Document
     all_docs = [
@@ -184,14 +184,15 @@ def main():
     ]
     print(f"총 {len(all_docs)}개 청크 로드 완료")
 
-    retriever = RETRIEVER.build_retriever(vectorstore, all_docs, k=args.k)
+    # 두 리트리버 모두 준비 (쿼리마다 router가 선택)
+    retrievers = ret_router.build_retriever(vectorstore, all_docs, k=args.k)
 
     if args.query:
-        search(retriever, args.query, top_n=args.top_n)
+        search(retrievers, args.query, top_n=args.top_n)
     elif args.ask:
-        ask(retriever, args.ask)
+        ask(retrievers, args.ask)
     else:
-        interactive_mode(retriever)
+        interactive_mode(retrievers)
 
 
 if __name__ == "__main__":
