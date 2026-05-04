@@ -9,11 +9,13 @@ src/reportcreator/freeform_chain.py
         + 질문 유형별 추가 섹션
   - question_type == "other" (모호하거나 복합적인 질문)
       → 풀 리포트 경로
-      → 증권사별 요약 → 컨센서스/이견 → 인사이트 → 7섹션 종합 리포트
+      → 증권사별 요약 → 컨센서스/이견 → 인사이트 → 8블록 종합 리포트
 
 지원 질문 유형:
   - fact_lookup       : "이 수치의 출처와 산출 근거가 뭐야?"
-  - coverage_summary  : "특정 이벤트에 대한 커버리지 현황을 정리해줘"
+  - coverage_summary  : "특정 이벤트·종목·섹터에 대해 어떤 증권사가 언제 어떤 형식으로
+                         다뤘는지 커버리지 인벤토리를 정리. 누가 심층 분석했고 누가
+                         위클리성 언급에 그쳤는지 커버 깊이·방식·분석 범위 차이까지 비교."
   - timeline          : "이번 달 반도체 섹터 투자의견 변화"
   - broker_comparison : "하나증권과 키움증권의 3월 의견 차이"
   - risk              : "조선업에서 언급된 리스크 요인 정리"
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -58,12 +61,18 @@ def _llm_strong() -> ChatOpenAI: return ChatOpenAI(model="gpt-4o",      temperat
 # ── 메타데이터 헬퍼 (source_firm / broker 양쪽 호환) ─────────────────────────
 
 def _get_firm(doc: Document) -> str:
-    """freeform 은 source_firm, report_chain 은 broker 를 사용하므로 양쪽 호환."""
-    return (
-        doc.metadata.get("source_firm")
-        or doc.metadata.get("broker")
-        or "알 수 없음"
-    )
+    """freeform 은 source_firm, report_chain 은 broker 를 사용하므로 양쪽 호환.
+
+    Notes:
+        단순 `or` 체이닝은 빈 문자열도 falsy 로 처리하여 의도치 않은 fallback 이 발생할 수
+        있으므로, 명시적 isinstance + strip 검증으로 교체한다.
+        0 / False 같은 비문자열 falsy 값이 metadata 에 혼입된 경우도 방어된다.
+    """
+    for key in ("source_firm", "broker"):
+        val = doc.metadata.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return "알 수 없음"
 
 
 # ── Step 1: 질문 유형 분류 + 검색 쿼리 생성 (7유형 few-shot) ─────────────────
@@ -298,7 +307,7 @@ def _collect_chunks(
         normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
         pinned = [
             d for d in all_candidates
-            if any(nb in (_get_firm(d) or "").replace(" ", "")
+            if any(nb in _get_firm(d).replace(" ", "")
                    for nb in normalized)
         ]
         all_candidates = pinned 
@@ -314,7 +323,9 @@ def _collect_chunks(
         else:
             print(f"  ⚠️ {target_period} 기간 청크 없음 → 전체 검색 유지")
 
-    return _rerank(queries[0], all_candidates, top_n=top_n)
+    # ✅ rerank 쿼리: 단일 첫 번째 쿼리 대신 모든 쿼리를 결합해 의미 커버리지를 확보
+    combined_query = " ".join(queries)
+    return _rerank(combined_query, all_candidates, top_n=top_n)
 
 
 # ── Step 3: 증권사별 컨텍스트 구성 (few-shot 경로용) ─────────────────────────
@@ -343,7 +354,11 @@ def _build_context(docs: list[Document], target_brokers: list[str]) -> str:
     parts = []
     for firm in order:
         date_str = ", ".join(sorted(broker_dates[firm])) or "날짜 미상"
-        content  = "\n\n---\n\n".join(broker_chunks[firm])[:4000]
+        # ✅ 청크 수에 따라 예산을 균등 배분 — 단순 joined[:4000] 은 앞쪽 청크만 살아남는 문제 방지
+        chunks      = broker_chunks[firm]
+        budget      = 4000
+        per_chunk   = max(budget // len(chunks), 200)  # 최소 200자 보장
+        content     = "\n\n---\n\n".join(c[:per_chunk] for c in chunks)
         parts.append(f"### [{firm}] (리포트 날짜: {date_str})\n{content}")
 
     return "\n\n".join(parts)
@@ -1001,7 +1016,8 @@ _SUMMARY_PROMPT = ChatPromptTemplate.from_template("""
 
 def _summarize_by_broker(docs: list[Document], topic: str) -> dict[str, str]:
     print("  → 증권사별 요약 생성 중...")
-    llm = _llm_fast()
+    # ✅ 증권사별 요약은 8블록 최종 리포트의 기초 재료이므로 품질이 중요 → gpt-4o 사용
+    llm = _llm_strong()
 
     broker_chunks: dict[str, list[str]] = {}
     broker_titles: dict[str, list[str]] = {}
@@ -1135,7 +1151,10 @@ _DIFFERENCE_PROMPT = ChatPromptTemplate.from_template("""
 
 ## 1. 핵심 이견 요약
 
-가장 중요한 이견을 3~5개만 선정하세요.
+가장 중요한 이견을 최대 5개까지 선정하세요.
+
+※ 이견이 적으면 적은 개수만 작성하세요.
+※ 이견이 없는 경우 "유의미한 이견 없음"이라고 명시하세요.
 
 각 이견은 아래 구조로 작성하세요.
 
@@ -1205,10 +1224,22 @@ def _analyze_consensus(summaries: dict[str, str], topic: str) -> tuple[str, str]
     print("  → 컨센서스 & 차이점 분석 중...")
     llm = _llm_fast()
     summaries_text = "\n\n".join([f"[{b}]\n{s}" for b, s in summaries.items()])
-    consensus   = (_CONSENSUS_PROMPT  | llm).invoke({"topic": topic, "summaries": summaries_text})
-    differences = (_DIFFERENCE_PROMPT | llm).invoke({"topic": topic, "summaries": summaries_text})
-    print("  → 분석 완료")
-    return consensus.content, differences.content
+
+    # ✅ 두 LLM 호출을 병렬 실행해 지연 시간을 절반으로 단축
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fc = ex.submit(
+            (_CONSENSUS_PROMPT  | llm).invoke,
+            {"topic": topic, "summaries": summaries_text},
+        )
+        fd = ex.submit(
+            (_DIFFERENCE_PROMPT | llm).invoke,
+            {"topic": topic, "summaries": summaries_text},
+        )
+        consensus_result   = fc.result()
+        differences_result = fd.result()
+
+    print(" → 분석 완료")
+    return consensus_result.content, differences_result.content
 
 
 # ── Step C: 인사이트 도출 ────────────────────────────────────────────────────
@@ -1341,7 +1372,7 @@ def _extract_insights(
     return response.content
 
 
-# ── Step D: 최종 7섹션 리포트 생성 ───────────────────────────────────────────
+# ── Step D: 최종 8블록 리포트 생성 ───────────────────────────────────────────
 
 _FINAL_REPORT_PROMPT = ChatPromptTemplate.from_template("""
 당신은 15년 이상 경력의 기관 투자자 대상 리서치 애널리스트입니다.
@@ -1523,7 +1554,7 @@ def _generate_full_report(
     differences: str,
     insights:    str,
 ) -> str:
-    print("  → 최종 7섹션 리포트 생성 중... (gpt-4o)")
+    print("  → 최종 8블록 리포트 생성 중... (gpt-4o)")
     llm = _llm_strong()
 
     summaries_text = "\n\n".join([f"[{b}]\n{s}" for b, s in summaries.items()])
@@ -1541,6 +1572,47 @@ def _generate_full_report(
     })
     print("  → 완료")
     return response.content
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 면책조항(Disclaimer) 생성
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_disclaimer(
+    sources:        list[str],
+    question_type:  str,
+    mode:           str,
+) -> str:
+    """
+    리포트 하단에 삽입할 면책조항 마크다운 블록을 반환한다.
+
+    Args:
+        sources:       참고 증권사 목록 (예: ["iM증권", "키움증권"])
+        question_type: 질문 유형 (fact_lookup / coverage_summary / … / other)
+        mode:          처리 모드 ("freeform" | "full_report")
+
+    Returns:
+        마크다운 형식의 면책조항 문자열
+    """
+    date_str     = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
+    sources_str  = ", ".join(sources) if sources else "알 수 없음"
+    mode_label   = "종합 리포트 (풀 파이프라인)" if mode == "full_report" else f"요약 분석 ({question_type})"
+
+    return f"""
+---
+
+> **⚠️ 면책조항 (Disclaimer)**
+>
+> 본 자료는 **{sources_str}** 에서 발행한 리서치 리포트를 검색·발췌하여 AI가 재구성한 참고용 문서입니다.
+> 생성 시각: {date_str} | 분석 유형: {mode_label}
+>
+> - 본 자료는 **투자 권유, 매매 추천, 종목 추천을 목적으로 하지 않습니다.**
+> - 본 자료에 인용된 수치·전망·투자의견은 **원본 리포트 발행 시점 기준**이며, 현재 시점과 다를 수 있습니다.
+> - AI 검색·요약 과정에서 원문의 맥락 누락, 수치 오인용, 의미 변형이 발생할 수 있으므로 반드시 **원본 리포트를 직접 확인**하시기 바랍니다.
+> - 동일 주제에 대해 수집되지 않은 증권사 리포트가 존재할 수 있으며, 본 자료는 수집된 리포트 범위 내에서만 유효합니다.
+> - 투자 판단의 최종 책임은 이용자 본인에게 있습니다.
+> - 본 서비스는 「자본시장과 금융투자업에 관한 법률」상 투자자문업 또는 투자일임업에 해당하지 않습니다.
+"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1565,7 +1637,7 @@ def answer_question(
       - 명확 유형(fact_lookup, coverage_summary, timeline, broker_comparison,
         risk, consensus) → 공통 4섹션 + 유형별 추가 구조(few-shot)
       - other(모호·복합 질문) → 증권사별 요약/컨센서스/이견/인사이트 기반
-        7섹션 종합 리포트
+        8블록 종합 리포트
 
     Returns:
         {
@@ -1625,7 +1697,7 @@ def answer_question(
     if is_other:
         # other 경로: 프롬프트 기준 풀 리포트 생성
         # Step 3에서 중간 분석(증권사별 요약 → 컨센서스/이견 → 인사이트)을 만들고,
-        # Step 4에서 최종 7섹션 종합 리포트를 생성한다.
+        # Step 4에서 최종 8블록 종합 리포트를 생성한다.
         topic = intent.get("target_sector") or question
 
         print(f"\n[Step 3] 풀 리포트용 중간 분석 생성 중... (topic='{topic}')")
@@ -1633,13 +1705,12 @@ def answer_question(
         consensus, differences = _analyze_consensus(summaries, topic)
         insights               = _extract_insights(summaries, consensus, differences, topic)
 
-        print("\n[Step 4] 7섹션 종합 리포트 생성 중... (gpt-4o)")
+        print("\n[Step 4] 8블록 종합 리포트 생성 중... (gpt-4o)")
         answer                 = _generate_full_report(
             topic, summaries, consensus, differences, insights
         )
         print("  → 완료")
     else:
-        # 명확 유형 경로: 공통 4섹션 + 유형별 추가 구조를 따르는 freeform 답변
         print("\n[Step 3] freeform 답변용 증권사별 컨텍스트 구성 중...")
         context = _build_context(docs, intent["target_brokers"])
 
@@ -1650,6 +1721,14 @@ def answer_question(
             structure_hint = intent.get("structure_hint", "질문에 맞게 자유롭게 구성"),
         )
         print("  → 완료")
+
+    # ── 면책조항 추가 ─────────────────────────────────────────────────────
+    disclaimer = build_disclaimer(
+        sources       = sources,
+        question_type = intent["question_type"],
+        mode          = mode,
+    )
+    answer = answer + disclaimer
 
     # ── 저장 ──────────────────────────────────────────────────────────
     if save:
@@ -1684,4 +1763,3 @@ def answer_question(
         "chunk_count":   len(docs),
         "mode":          mode,
         "docs":          docs,
-    }
