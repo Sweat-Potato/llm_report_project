@@ -1643,7 +1643,7 @@ def answer_question(
     # ── 저장 ──────────────────────────────────────────────────────────
     if save:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
-        safe   = re.sub(r'[\\/:*?"<>|]', "_", question[:40])
+        safe   = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", question[:40]).strip()
         ts     = datetime.now().strftime("%Y%m%d_%H%M")
         prefix = "fullreport" if is_other else "freeform"
         base   = Path(output_dir) / f"{prefix}_{safe}_{ts}"
@@ -1672,4 +1672,5 @@ def answer_question(
         "sources":       sources,
         "chunk_count":   len(docs),
         "mode":          mode,
+        "docs":          docs,
     }

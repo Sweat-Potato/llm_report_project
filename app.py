@@ -332,7 +332,7 @@ def load_backend():
     from src.processing.chunking import chunking_01_recursive as CHUNKING
     from src.embedding import embedding_01_openai as EMBEDDING
     from src.vectorstore import vectorstore_01_chroma as VECTORSTORE
-    from src.retriever import retriever_01_ensemble as RETRIEVER
+    from src.retriever import router as ROUTER
     from src.reranker import reranker_01_crossencoder as RERANKER
     from langchain.schema import Document
 
@@ -349,8 +349,9 @@ def load_backend():
         Document(page_content=text, metadata=meta)
         for text, meta in zip(results["documents"], results["metadatas"])
     ]
-    retriever = RETRIEVER.build_retriever(vectorstore, all_docs, k=40)
-    return retriever, RETRIEVER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, len(all_docs)
+    # router.build_retriever → (ret1_instance, ret2_instance, all_docs) 튜플 반환
+    retriever_tuple = ROUTER.build_retriever(vectorstore, all_docs, k=40)
+    return retriever_tuple, ROUTER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, len(all_docs)
 
 
 # ── 헬퍼 ───────────────────────────────────────────────────────────────────────
@@ -409,7 +410,7 @@ with st.sidebar:
 
     page = st.radio(
         "페이지 선택",
-        options=["🏠  대시보드", "🔎  검색", "💬  질문 · 분석", "📂  최근 리포트"],
+        options=["🏠  대시보드", "💬  질문 · 분석", "📂  최근 리포트"],
         label_visibility="collapsed",
     )
     page = page.split("  ", 1)[-1].strip()
@@ -424,7 +425,7 @@ with st.sidebar:
     st.markdown('<div style="font-size:0.72rem;font-weight:700;color:var(--text-sub);letter-spacing:0.08em;padding:0 0.3rem 0.4rem;">시스템 정보</div>', unsafe_allow_html=True)
 
     with st.spinner("벡터스토어 로드 중…"):
-        retriever, RETRIEVER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, total_chunks = load_backend()
+        retriever, ROUTER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, total_chunks = load_backend()
 
     db_ok = retriever is not None
     if db_ok:
@@ -433,7 +434,7 @@ with st.sidebar:
           <div>✅ ChromaDB 연결됨</div>
           <div style="color:var(--text-sub);margin-top:0.3rem;">청크 수: <b style="color:var(--text-main);">{total_chunks:,}</b></div>
           <div style="color:var(--text-sub);">청킹: <b style="color:var(--text-main);">{CHUNKING.STRATEGY_NAME}</b></div>
-          <div style="color:var(--text-sub);">리트리버: <b style="color:var(--text-main);">{RETRIEVER.STRATEGY_NAME}</b></div>
+          <div style="color:var(--text-sub);">리트리버: <b style="color:var(--text-main);">router (ensemble ↔ balanced)</b></div>
           <div style="color:var(--text-sub);">리랭커: <b style="color:var(--text-main);">{RERANKER.STRATEGY_NAME}</b></div>
         </div>
         """, unsafe_allow_html=True)
@@ -528,7 +529,7 @@ if page == "대시보드":
 
 # ── 페이지: 검색 ───────────────────────────────────────────────────────────────
 
-elif page == "검색":
+elif page == "__검색_삭제됨__":
     st.markdown('<p class="hz-page-title">청크 검색</p>', unsafe_allow_html=True)
     st.markdown('<p class="hz-page-sub">Hybrid Search (BM25 + Vector) + BGE Cross-Encoder 리랭킹</p>', unsafe_allow_html=True)
 
@@ -657,7 +658,7 @@ elif page == "질문 · 분석":
             progress_bar.progress(20, text="문서 검색 중…")
             result = answer_question(
                 retriever, question,
-                retrieve_fn=lambda r, q, k: RETRIEVER.retrieve(r, q, k=k),
+                retrieve_fn=lambda r, q, k: ROUTER.retrieve(r, q, k=k),
                 rerank_fn=lambda q, docs, top_n: RERANKER.rerank(q, docs, top_n=top_n),
             )
             elapsed = time.time() - t0
@@ -701,6 +702,43 @@ elif page == "질문 · 분석":
             file_name=f"report_{qt}_{int(t0)}.md",
             mime="text/markdown",
         )
+
+        # 참조 청크 출처
+        retrieved_docs = result.get("docs", [])
+        if retrieved_docs:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown('<div class="hz-section-header">📎 참조 청크 출처</div>', unsafe_allow_html=True)
+            for i, doc in enumerate(retrieved_docs, 1):
+                broker  = doc.metadata.get("source_firm", doc.metadata.get("broker", "-"))
+                date    = doc.metadata.get("report_date", "-")
+                sector  = doc.metadata.get("sector", "-")
+                title   = doc.metadata.get("title", "")
+                score   = doc.metadata.get("rerank_score", None)
+                content = doc.page_content
+
+                score_html = ""
+                if score is not None:
+                    try:
+                        s = float(score)
+                        pct = max(0, min(100, int(s * 100)))
+                        bar_color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
+                        score_html = f'<span style="font-size:0.7rem;font-weight:700;color:{bar_color};background:{bar_color}22;padding:0.1rem 0.45rem;border-radius:999px;">score {s:.3f}</span>'
+                    except Exception:
+                        pass
+
+                sector_html = sector_badge(sector) if sector and sector != "-" else ""
+                preview = content[:200] + ("…" if len(content) > 200 else "")
+
+                with st.expander(f"#{i}  {broker}  ·  {date}  {'· ' + title[:30] if title else ''}"):
+                    st.markdown(f"""
+                    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;align-items:center;">
+                      {sector_html} {score_html}
+                    </div>
+                    <div style="font-size:0.83rem;color:var(--text-body);line-height:1.7;">{preview}</div>
+                    """, unsafe_allow_html=True)
+                    if len(content) > 200:
+                        if st.toggle("전문 보기", key=f"chunk_full_{i}"):
+                            st.text(content)
 
     elif submitted:
         st.warning("질문을 입력해 주세요.")
