@@ -249,14 +249,29 @@ def retrieve(
     k:          int = 40,
 ) -> list[Document]:
     """
-    쿼리 의도 + 증권사 언급에 따라 자동 검색
+    쿼리 의도 + 증권사 언급에 따라 자동 검색 (main.py용)
 
     동작:
     1. LLM으로 의도 분류 + 증권사명 추출 + 정규화
     2. 의도에 따라 리트리버 선택 (앙상블 내부에서 BM25+벡터 검색)
-       비교 쿼리 → retriever_02_balanced (증권사별 균등)
-       일반 쿼리 → retriever_01_ensemble (점수 기반)
     3. 특정 증권사 언급 시 → 검색 결과에서 해당 증권사만 필터링
+    """
+    docs, _, _ = retrieve_with_meta(retrievers, query, k=k)
+    return docs
+
+
+def retrieve_with_meta(
+    retrievers: tuple,
+    query:      str,
+    k:          int = 40,
+) -> tuple[list[Document], str, list[str]]:
+    """
+    쿼리 의도 + 증권사 언급에 따라 자동 검색 (freeform_chain용)
+
+    Returns: (docs, intent, firms)
+      docs:   검색된 Document 리스트
+      intent: "balanced" | "ensemble"
+      firms:  언급된 증권사 목록 (없으면 [])
     """
     ret1_instance, ret2_instance, all_docs = retrievers
 
@@ -279,9 +294,39 @@ def retrieve(
         print(f"  → 증권사 필터링: {firms}")
         result = _filter_by_firms(raw, firms)
         print(f"  → 필터링 결과: {len(result)}개 청크")
-        return result
+        return result, intent, firms
 
-    return raw
+    return raw, intent, firms
+
+
+# ── freeform_chain 전용: 외부에서 intent 받아 리트리버만 선택 ─────────────────
+
+def select_and_retrieve(
+    retrievers: tuple,
+    query:      str,
+    intent:     str = "ensemble",
+    k:          int = 40,
+) -> list[Document]:
+    """
+    freeform_chain 전용 함수
+    - intent는 freeform_chain._analyze_intent()가 이미 추출한 값을 받음
+    - LLM 호출 없음 (리트리버 선택만)
+    - 증권사 추출/필터링 없음 (freeform_chain의 target_brokers가 처리)
+
+    Args:
+        retrievers: build_retriever()가 반환한 튜플
+        query:      검색 쿼리
+        intent:     "balanced" | "ensemble" (freeform_chain에서 전달)
+        k:          반환할 청크 수
+    """
+    ret1_instance, ret2_instance, all_docs = retrievers
+
+    if intent == "balanced":
+        print(f"  → retriever_02_balanced 사용 (증권사별 균등 샘플링)")
+        return ret2.retrieve(ret2_instance, query, k=k)
+    else:
+        print(f"  → retriever_01_ensemble 사용 (점수 기반)")
+        return ret1.retrieve(ret1_instance, query, k=k)
 
 
 # ── 단독 실행 (테스트) ────────────────────────────────────────────────────────

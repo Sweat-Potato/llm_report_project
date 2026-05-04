@@ -40,9 +40,14 @@ from langchain.schema import Document, AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 
+
+
 # 주의: retrieve/rerank 함수는 main.py 가 retrieve_fn / rerank_fn 인자로 주입한다.
 # 여기서 특정 전략을 직접 import 하면 main.py 의 전략 교체(RETRIEVER / RERANKER)가 무력화되므로,
 # 이 모듈은 어떤 retriever/reranker 전략과도 결합 가능하도록 함수 인자에만 의존한다.
+
+from src.retriever.router import select_and_retrieve as _router_select_and_retrieve
+from src.reranker.reranker_01_crossencoder import rerank as _default_rerank
 
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
@@ -260,19 +265,22 @@ def _analyze_intent(question: str) -> dict:
 # ── Step 2: 다중 쿼리 검색 + 중복 제거 + Rerank ───────────────────────────────
 
 def _collect_chunks(
-    retriever,
+    retrievers,
     queries:        list[str],
     target_brokers: list[str],
-    retrieve_fn:    callable,
-    rerank_fn:      callable,
+    retrieve_fn:    None,
+    rerank_fn:      None,
     k_per_query:    int = 15,
     top_n:          int = 12,
+    intent:         str = "ensemble",
 ) -> list[Document]:
+    _rerank = rerank_fn if rerank_fn else _default_rerank
     all_candidates: list[Document] = []
     seen: set[tuple] = set()
 
     for q in queries:
-        for doc in retrieve_fn(retriever, q, k=k_per_query):
+        _retrieve = retrieve_fn if retrieve_fn else lambda r, q, k: _router_select_and_retrieve(r, q, intent=intent, k=k)
+        for doc in _retrieve(retrievers, q, k=k_per_query):
             # dedup 키: filename + chunk_index/chunk_id 우선, 없으면 page_content 앞부분으로 fallback.
             # 메타키가 누락되어 모든 청크가 같은 키로 잘리는 사고를 방지.
             filename = doc.metadata.get("filename", "")
@@ -296,7 +304,7 @@ def _collect_chunks(
         rest = [d for d in all_candidates if d not in pinned]
         all_candidates = pinned + rest
 
-    return rerank_fn(queries[0], all_candidates, top_n=top_n)
+    return _rerank(queries[0], all_candidates, top_n=top_n)
 
 
 # ── Step 3: 증권사별 컨텍스트 구성 (few-shot 경로용) ─────────────────────────
@@ -1530,10 +1538,10 @@ def _generate_full_report(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def answer_question(
-    retriever,
+    retrievers,
     question:    str,
-    retrieve_fn: callable,
-    rerank_fn:   callable,
+    retrieve_fn: None,
+    rerank_fn:   None,
     k_per_query: int  = 15,
     top_n:       int  = 12,
     # other 경로(풀 리포트)에서 사용할 검색 파라미터
@@ -1576,14 +1584,16 @@ def answer_question(
 
     # ── Step 2: 다중 쿼리 검색 + 중복 제거 + Rerank ─────────────────────
     print("\n[Step 2] 리포트 청크 수집 및 rerank 중...")
+    _intent = "balanced" if intent["question_type"] == "broker_comparison" else "ensemble"
     docs = _collect_chunks(
-        retriever,
+        retrievers,
         queries        = intent["search_queries"],
         target_brokers = intent["target_brokers"],
         retrieve_fn    = retrieve_fn,
         rerank_fn      = rerank_fn,
         k_per_query    = k_full if is_other else k_per_query,
         top_n          = top_n_full if is_other else top_n,
+        intent         = _intent,
     )
     print(f"  → {len(docs)}개 청크 확보")
 
