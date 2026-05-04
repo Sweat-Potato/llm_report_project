@@ -52,7 +52,7 @@ def step_retrieve(
 
     broker_counts = {}
     for doc in docs:
-        b = doc.metadata.get("broker", "unknown")
+        b = doc.metadata.get("source_firm", "unknown")
         broker_counts[b] = broker_counts.get(b, 0) + 1
     print(f"  → 증권사 분포: {dict(sorted(broker_counts.items(), key=lambda x: -x[1]))}")
 
@@ -100,7 +100,7 @@ def step_summarize_by_broker(docs: list[Document], topic: str) -> dict[str, str]
     broker_titles: dict[str, list[str]] = {}
 
     for doc in docs:
-        broker = doc.metadata.get("broker", "unknown")
+        broker = doc.metadata.get("source_firm", "unknown")
         title  = doc.metadata.get("title", "")
         broker_chunks.setdefault(broker, []).append(doc.page_content)
         if title and title not in broker_titles.get(broker, []):
