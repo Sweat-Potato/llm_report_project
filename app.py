@@ -409,7 +409,7 @@ with st.sidebar:
 
     page = st.radio(
         "페이지 선택",
-        options=["🏠  대시보드", "🔎  검색", "💬  질문 · 분석", "📂  최근 리포트"],
+        options=["🏠  대시보드", "💬  질문 · 분석", "📂  최근 리포트"],
         label_visibility="collapsed",
     )
     page = page.split("  ", 1)[-1].strip()
@@ -528,7 +528,7 @@ if page == "대시보드":
 
 # ── 페이지: 검색 ───────────────────────────────────────────────────────────────
 
-elif page == "검색":
+elif page == "__검색_삭제됨__":
     st.markdown('<p class="hz-page-title">청크 검색</p>', unsafe_allow_html=True)
     st.markdown('<p class="hz-page-sub">Hybrid Search (BM25 + Vector) + BGE Cross-Encoder 리랭킹</p>', unsafe_allow_html=True)
 
@@ -701,6 +701,43 @@ elif page == "질문 · 분석":
             file_name=f"report_{qt}_{int(t0)}.md",
             mime="text/markdown",
         )
+
+        # 참조 청크 출처
+        retrieved_docs = result.get("docs", [])
+        if retrieved_docs:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown('<div class="hz-section-header">📎 참조 청크 출처</div>', unsafe_allow_html=True)
+            for i, doc in enumerate(retrieved_docs, 1):
+                broker  = doc.metadata.get("source_firm", doc.metadata.get("broker", "-"))
+                date    = doc.metadata.get("report_date", "-")
+                sector  = doc.metadata.get("sector", "-")
+                title   = doc.metadata.get("title", "")
+                score   = doc.metadata.get("rerank_score", None)
+                content = doc.page_content
+
+                score_html = ""
+                if score is not None:
+                    try:
+                        s = float(score)
+                        pct = max(0, min(100, int(s * 100)))
+                        bar_color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
+                        score_html = f'<span style="font-size:0.7rem;font-weight:700;color:{bar_color};background:{bar_color}22;padding:0.1rem 0.45rem;border-radius:999px;">score {s:.3f}</span>'
+                    except Exception:
+                        pass
+
+                sector_html = sector_badge(sector) if sector and sector != "-" else ""
+                preview = content[:200] + ("…" if len(content) > 200 else "")
+
+                with st.expander(f"#{i}  {broker}  ·  {date}  {'· ' + title[:30] if title else ''}"):
+                    st.markdown(f"""
+                    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;align-items:center;">
+                      {sector_html} {score_html}
+                    </div>
+                    <div style="font-size:0.83rem;color:var(--text-body);line-height:1.7;">{preview}</div>
+                    """, unsafe_allow_html=True)
+                    if len(content) > 200:
+                        if st.toggle("전문 보기", key=f"chunk_full_{i}"):
+                            st.text(content)
 
     elif submitted:
         st.warning("질문을 입력해 주세요.")
