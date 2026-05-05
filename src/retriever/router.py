@@ -239,7 +239,7 @@ def build_retriever(
     """
     ret1_instance = ret1.build_retriever(vectorstore, all_docs, k=k)
     ret2_instance = ret2.build_retriever(vectorstore, all_docs, k=k)
-    return ret1_instance, ret2_instance, all_docs
+    return ret1_instance, ret2_instance, all_docs, vectorstore
 
 
 def retrieve(
@@ -272,7 +272,7 @@ def retrieve_with_meta(
       intent: "balanced" | "ensemble"
       firms:  언급된 증권사 목록 (없으면 [])
     """
-    ret1_instance, ret2_instance, all_docs = retrievers
+    ret1_instance, ret2_instance, all_docs, vectorstore = retrievers
 
     # 1. 쿼리 분석
     intent, firms = analyze_query(query)
