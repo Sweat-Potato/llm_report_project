@@ -49,6 +49,50 @@ from langchain.prompts import ChatPromptTemplate
 from src.retriever.router import select_and_retrieve as _router_select_and_retrieve
 from src.reranker.reranker_01_crossencoder import rerank as _default_rerank
 
+
+# 메타데이터에 실제 존재하는 섹터 목록
+VALID_SECTORS = {
+    "건설", "건자재", "광고", "금융", "기계", "휴대폰", "담배", "유통",
+    "미디어", "바이오", "반도체", "보험", "석유화학", "섬유의류", "소프트웨어",
+    "운수창고", "유틸리티", "은행", "인터넷포탈", "자동차", "전기전자", "제약",
+    "조선", "종이", "증권", "철강금속", "타이어", "통신", "항공운송", "홈쇼핑",
+    "음식료", "여행", "게임", "IT", "에너지", "해운", "지주회사", "디스플레이",
+    "화장품", "자동차부품", "교육", "기타",
+}
+
+# 사용자 입력 → 메타데이터 섹터 매핑
+SECTOR_ALIASES = {
+    "HBM": "반도체",
+    "DRAM": "반도체",
+    "NAND": "반도체",
+    "메모리": "반도체",
+    "완성차": "자동차",
+    "조선업": "조선",
+    "바이오제약": "바이오",
+    "2차전지": "기타",
+    "배터리": "기타",
+    "전기차": "기타",
+    "EV": "기타",
+    "양극재": "기타",
+    "ESS": "기타",
+}
+
+
+def normalize_sector(sector: str) -> str:
+    """
+    사용자 입력 섹터를 메타데이터 실제 섹터로 정규화
+    - SECTOR_ALIASES에 있으면 매핑
+    - VALID_SECTORS에 있으면 그대로
+    - 둘 다 없으면 "기타"
+    """
+    if not sector:
+        return None
+    if sector in SECTOR_ALIASES:
+        return SECTOR_ALIASES[sector]
+    if sector in VALID_SECTORS:
+        return sector
+    return "기타"
+
 # ── LLM ──────────────────────────────────────────────────────────────────────
 
 def _llm_fast()   -> ChatOpenAI: return ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -267,15 +311,99 @@ def _collect_chunks(
     retrievers,
     queries:        list[str],
     target_brokers: list[str],
-    retrieve_fn:    None,
-    rerank_fn:      None,
+    retrieve_fn=    None,
+    rerank_fn=      None,
     k_per_query:    int = 15,
     top_n:          int = 12,
     intent:         str = "ensemble",
     target_period:  str = None,
+    target_sector:  str = None,
 ) -> list[Document]:
     _rerank = rerank_fn if rerank_fn else _default_rerank
+    _, _, all_docs, vectorstore = retrievers
+
+    # 섹터/날짜 필터링이 있으면 미리 필터링된 청크로 검색
+    if target_sector or target_period:
+        pre_filtered = all_docs
+        if target_sector:
+            sector_mapped = normalize_sector(target_sector)
+            pre_filtered = [d for d in pre_filtered if d.metadata.get("sector", "") == sector_mapped]
+            print(f"  → 사전 섹터 필터링: '{target_sector}' → '{sector_mapped}' ({len(pre_filtered)}개)")
+        if target_period:
+            pre_filtered = [d for d in pre_filtered if d.metadata.get("report_date", "").startswith(target_period)]
+            print(f"  → 사전 기간 필터링: {target_period} ({len(pre_filtered)}개)")
+
+        if not pre_filtered:
+            print(f"  ⚠️ 필터링 결과 없음 → 전체 청크로 검색")
+        else:
+            # 필터링된 청크로 BM25 재구성
+            try:
+                from src.retriever import retriever_01_ensemble as ret1
+                from src.retriever import retriever_02_balanced as ret2
+            except ImportError:
+                from src.retriever import retriever_01_ensemble as ret1
+                from src.retriever import retriever_02_balanced as ret2
+
+            ret1_new = ret1.build_retriever(vectorstore, pre_filtered, k=k_per_query)
+            ret2_new = ret2.build_retriever(vectorstore, pre_filtered, k=k_per_query)
+
+            all_candidates = []
+            seen = set()
+            for q in queries:
+                if intent == "balanced":
+                    docs_q = ret2.retrieve(ret2_new, q, k=k_per_query)
+                else:
+                    docs_q = ret1.retrieve(ret1_new, q, k=k_per_query)
+
+                firms_in_q = set(d.metadata.get("source_firm","") for d in docs_q) ##
+                print(f"  쿼리 '{q[:20]}' → {len(docs_q)}개, 증권사: {firms_in_q}") ##
+
+                for doc in docs_q:
+                    filename = doc.metadata.get("filename", "")
+                    chunk_id = doc.metadata.get("chunk_index") or doc.metadata.get("chunk_id") or doc.page_content[:120]
+                    key = (filename, chunk_id)
+                    if key not in seen:
+                        seen.add(key)
+                        all_candidates.append(doc)
+
+            if target_brokers and intent == "balanced":
+                print(f"  all_candidates 샘플 메타데이터:")
+                for d in all_candidates[:3]:
+                    print(f"    source_firm='{d.metadata.get('source_firm')}', broker='{d.metadata.get('broker')}'")
+                per_firm = max(1, top_n // len(target_brokers))
+                results = []
+                for i, firm in enumerate(target_brokers):
+                    nb = firm.replace("증권", "").replace(" ", "")
+                    firm_docs = [
+                        d for d in all_candidates
+                         if nb in (_get_firm(d) or "").replace(" ", "")
+                    ]
+                    if firm_docs:
+                        # 해당 증권사 쿼리로 rerank ← 수정
+                        firm_query = queries[i] if i < len(queries) else queries[0]
+                        reranked = _rerank(firm_query, firm_docs, top_n=per_firm)
+                        results.extend(reranked)
+                        print(f"  ✅ '{firm}': {len(reranked)}개 확보")
+                    else:
+                        print(f"  ❌ '{firm}' 청크 없음")
+                return results
+
+    
+            if target_brokers:
+                normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
+                pinned = [d for d in all_candidates if any(nb in (_get_firm(d) or "").replace(" ", "") for nb in normalized)]
+                if pinned:
+                    all_candidates = pinned
+                else:
+                    print(f"  ⚠️ {target_brokers} 청크 없음 → 전체 유지")
+   
+
+            return _rerank(queries[0], all_candidates, top_n=top_n)
+
     all_candidates: list[Document] = []
+    # all_candidates 로그 바로 아래에 추가
+    print(f"  intent: {intent}")
+    print(f"  target_brokers: {target_brokers}")
     seen: set[tuple] = set()
 
     for q in queries:
@@ -294,25 +422,32 @@ def _collect_chunks(
                 seen.add(key)
                 all_candidates.append(doc)
 
-    if target_brokers:
-        normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
-        pinned = [
-            d for d in all_candidates
-            if any(nb in (_get_firm(d) or "").replace(" ", "")
-                   for nb in normalized)
-        ]
-        all_candidates = pinned 
+    if target_brokers and intent == "balanced":
+        per_firm = max(1, top_n // len(target_brokers))
+        results = []
+        for firm in target_brokers:
+            nb = firm.replace("증권", "").replace(" ", "")
+            firm_docs = [
+                d for d in all_candidates
+                if nb in (_get_firm(d) or "").replace(" ", "")
+            ]  
+            if firm_docs:
+                reranked = _rerank(queries[0], firm_docs, top_n=per_firm)
+                results.extend(reranked)
+                print(f"  ✅ '{firm}': {len(reranked)}개 확보")
+            else:
+                print(f"  ❌ '{firm}' 청크 없음")
+        return results
 
-    # 기존 증권사 필터링 아래에 추가
-    if target_period:
-        filtered = [
-            d for d in all_candidates
-            if d.metadata.get("report_date", "").startswith(target_period)
-        ]
-        if filtered:  # 필터링 결과 없으면 전체 유지
-            all_candidates = filtered
-        else:
-            print(f"  ⚠️ {target_period} 기간 청크 없음 → 전체 검색 유지")
+    
+    if target_brokers:
+                normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
+                pinned = [d for d in all_candidates if any(nb in (_get_firm(d) or "").replace(" ", "") for nb in normalized)]
+                if pinned:
+                    all_candidates = pinned
+                else:
+                    print(f"  ⚠️ {target_brokers} 청크 없음 → 전체 유지")
+   
 
     return _rerank(queries[0], all_candidates, top_n=top_n)
 
@@ -1587,6 +1722,8 @@ def answer_question(
     print(f"  → 유형: {intent['question_type']}")
     print(f"  → 대상 증권사: {intent['target_brokers'] or '전체'}")
     print(f"  → 검색 쿼리: {intent['search_queries']}")
+    print(f"  → 섹터: {intent.get('target_sector') or '전체'}")  #추가
+    print(f"  → 기간: {intent.get('target_period') or '전체'}")  #추가
 
     is_other = intent["question_type"] == "other"
     mode = "full_report" if is_other else "freeform"
@@ -1594,7 +1731,15 @@ def answer_question(
 
     # ── Step 2: 다중 쿼리 검색 + 중복 제거 + Rerank ─────────────────────
     print("\n[Step 2] 리포트 청크 수집 및 rerank 중...")
-    _intent = "balanced" if intent["question_type"] == "broker_comparison" else "ensemble"
+    _intent = "balanced" if (
+    intent["question_type"] in ("broker_comparison", "consensus", "other")
+    or (intent["question_type"] == "coverage_summary" and intent["target_brokers"])
+    ) else "ensemble"
+
+    _k = k_full if is_other else k_per_query
+    if intent.get("target_sector") or intent.get("target_period"):
+        _k = _k * 3
+
     docs = _collect_chunks(
         retrievers,
         queries        = intent["search_queries"],
@@ -1605,6 +1750,7 @@ def answer_question(
         top_n          = top_n_full if is_other else top_n,
         intent         = _intent,
         target_period  = intent.get("target_period"),
+        target_sector  = intent.get("target_sector"),
     )
     print(f"  → {len(docs)}개 청크 확보")
 
