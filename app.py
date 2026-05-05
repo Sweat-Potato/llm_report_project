@@ -1,847 +1,780 @@
 """
-app.py
-금융 리서치 리포트 RAG 시스템 — Streamlit UI
-
-실행:
-    uv run streamlit run app.py
+app.py — 리서치 리포트 RAG 시스템 웹 UI
+Horizon UI Chakra 디자인 참고
 """
+import os
 import sys
-import re
+import time
 from pathlib import Path
-from datetime import datetime
+
+# PyTorch/OpenMP 충돌 방지 — 반드시 torch import 전에 설정
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+# ChromaDB 텔레메트리 완전 비활성화
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False"
+
+# ChromaDB telemetry 패치 (0.6.x capture() 버그 무음 처리)
+try:
+    import chromadb.telemetry.product.posthog as _ph
+    _ph.Posthog.capture = lambda *a, **kw: None  # noqa: E731
+except Exception:
+    pass
 
 import streamlit as st
 
-# ── 프로젝트 루트 경로 ────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from dotenv import load_dotenv
 load_dotenv()
 
-# ── 페이지 설정 (반드시 첫 번째 st 호출) ─────────────────────────────────────────
+# ── 페이지 설정 ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="리서치 리포트 분석 시스템",
+    page_title="리서치 리포트 RAG",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
-
-# ── 전략 모듈 임포트 ─────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def _import_modules():
-    from src.processing.chunking import chunking_01_recursive as c1
-    from src.processing.chunking import chunking_02_semantic  as c2
-    from src.processing.chunking import chunking_03_hybrid    as c3
-    from src.processing.chunking import chunking_04_sentence  as c4
-    from src.embedding   import embedding_01_openai      as emb1
-    from src.vectorstore import vectorstore_01_chroma    as vs1
-    from src.retriever   import retriever_01_ensemble    as ret1
-    from src.retriever   import retriever_02_balanced    as ret2
-    from src.reranker    import reranker_01_crossencoder as rer1
-    from src.reportcreator.report_chain   import (
-        generate_report,
-        step_retrieve,
-        step_summarize_by_broker,
-        step_analyze_consensus,
-        step_extract_insights,
-        step_generate_final_report,
-    )
-    from src.reportcreator.freeform_chain import answer_question
-    return (
-        {"RecursiveCharacterTextSplitter (기본)": c1,
-         "SemanticChunker": c2,
-         "Hybrid (길이별 자동 분기)": c3,
-         "문단 기준 (Sentence)": c4},
-        {"OpenAI text-embedding-3-small": emb1},
-        {"ChromaDB": vs1},
-        {"BM25 + Vector Ensemble": ret1,
-         "BM25 + Vector Balanced": ret2},
-        {"BGE Cross-Encoder": rer1},
-        generate_report,
-        (step_retrieve, step_summarize_by_broker,
-         step_analyze_consensus, step_extract_insights, step_generate_final_report),
-        answer_question,
-    )
-
-(
-    CHUNKING_OPTIONS, EMBEDDING_OPTIONS, VECTORSTORE_OPTIONS,
-    RETRIEVER_OPTIONS, RERANKER_OPTIONS,
-    generate_report, REPORT_STEPS, answer_question,
-) = _import_modules()
-
-VS_BASE_DIR = PROJECT_ROOT / "data" / "vectorstore"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CSS
-# ══════════════════════════════════════════════════════════════════════════════
+# ── 전역 CSS (Horizon UI Chakra 스타일) ───────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display&family=DM+Mono&family=Noto+Sans+KR:wght@300;400;500;600&display=swap');
+  /* ── 기본 색상 토큰 ── */
+  :root {
+    --brand:      #4318FF;
+    --brand-light:#6B48FF;
+    --bg-page:    #F4F7FE;
+    --bg-card:    #FFFFFF;
+    --text-main:  #2B3674;
+    --text-sub:   #A3AED0;
+    --text-body:  #707EAE;
+    --border:     #E9EDF7;
+    --success:    #01B574;
+    --warning:    #FFB547;
+    --danger:     #EE5D50;
+    --info:       #39B8FF;
+    --gradient:   linear-gradient(135deg, #4318FF 0%, #868CFF 100%);
+  }
 
-html, body, [class*="css"] {
-    font-family: 'Noto Sans KR', 'DM Sans', sans-serif;
-}
+  /* ── 전체 배경 ── */
+  .stApp { background: var(--bg-page); }
 
-/* ─ 사이드바 ─ */
-[data-testid="stSidebar"] {
-    background: #1A1A1C !important;
-    border-right: 1px solid #2A2A2C;
-}
-[data-testid="stSidebar"] * { color: #D8D8D8 !important; }
-[data-testid="stSidebar"] .stSelectbox > label,
-[data-testid="stSidebar"] .stNumberInput > label,
-[data-testid="stSidebar"] .stTextInput > label { color: #A8A8A8 !important; font-size: 0.8rem !important; }
-[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div {
-    background: #28282A !important;
-    border-color: #3A3A3C !important;
-}
-[data-testid="stSidebar"] .stNumberInput input {
-    background: #28282A !important;
-    border-color: #3A3A3C !important;
-    color: #E8E8E8 !important;
-}
+  /* ── 사이드바 ── */
+  [data-testid="stSidebar"] {
+    background: var(--bg-card);
+    border-right: 1px solid var(--border);
+  }
+  [data-testid="stSidebar"] .stMarkdown h1,
+  [data-testid="stSidebar"] .stMarkdown h2,
+  [data-testid="stSidebar"] .stMarkdown h3 {
+    color: var(--text-main);
+  }
 
-/* ─ 버튼 ─ */
-.stButton > button {
-    background: linear-gradient(135deg, #C9A84C 0%, #E8C96A 100%) !important;
-    color: #1A1A1C !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 0.55rem 1.4rem !important;
-    font-size: 0.88rem !important;
-    letter-spacing: 0.025em !important;
-    transition: all 0.18s ease !important;
-    box-shadow: 0 2px 8px rgba(201,168,76,0.25) !important;
-}
-.stButton > button:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 18px rgba(201,168,76,0.45) !important;
-}
-.stButton > button:active { transform: translateY(0) !important; }
+  /* ── 메인 컨텐츠 여백 ── */
+  .main .block-container {
+    padding: 1.5rem 2rem 2rem;
+    max-width: 1400px;
+  }
 
-/* ─ 탭 ─ */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 0.4rem;
-    border-bottom: 2px solid #EDE9E0;
-    padding-bottom: 0;
-}
-.stTabs [data-baseweb="tab"] {
-    border-radius: 8px 8px 0 0;
-    padding: 0.55rem 1.3rem;
-    font-size: 0.9rem;
-    font-weight: 500;
-    border: 1px solid transparent;
-    border-bottom: none;
-    color: #666;
-    background: transparent;
-}
-.stTabs [aria-selected="true"] {
-    background: #1A1A1C !important;
-    color: #C9A84C !important;
-    border-color: #EDE9E0 !important;
-    border-bottom-color: #1A1A1C !important;
-}
-
-/* ─ 공통 카드 ─ */
-.card {
-    background: #FFFFFF;
-    border: 1px solid #EDE9E0;
-    border-radius: 12px;
-    padding: 1.3rem 1.6rem;
+  /* ── 카드 컴포넌트 ── */
+  .hz-card {
+    background: var(--bg-card);
+    border-radius: 20px;
+    padding: 1.5rem 1.8rem;
+    border: 1px solid var(--border);
+    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.08);
     margin-bottom: 1rem;
-}
+  }
+  .hz-card-sm {
+    background: var(--bg-card);
+    border-radius: 16px;
+    padding: 1.2rem 1.4rem;
+    border: 1px solid var(--border);
+    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.06);
+    margin-bottom: 0.75rem;
+  }
 
-/* ─ 검색 결과 카드 ─ */
-.result-card {
-    background: #FFFFFF;
-    border: 1px solid #EDE9E0;
-    border-left: 4px solid #C9A84C;
-    border-radius: 0 10px 10px 0;
-    padding: 1.1rem 1.5rem;
-    margin-bottom: 0.9rem;
-    transition: box-shadow 0.18s ease;
-}
-.result-card:hover { box-shadow: 0 4px 18px rgba(0,0,0,0.08); }
-.result-card .rc-top {
+  /* ── 스탯 카드 ── */
+  .hz-stat {
+    background: var(--bg-card);
+    border-radius: 20px;
+    padding: 1.4rem 1.6rem;
+    border: 1px solid var(--border);
+    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.08);
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.6rem;
-}
-.badge-broker {
-    background: #1A1A1C;
-    color: #C9A84C !important;
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 0.18rem 0.7rem;
-    border-radius: 20px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-}
-.badge-score {
-    background: #F4EFE4;
-    color: #8A6A20 !important;
-    font-size: 0.72rem;
-    font-family: 'DM Mono', monospace;
-    padding: 0.18rem 0.6rem;
-    border-radius: 20px;
-}
-.rc-title {
-    font-weight: 600;
-    font-size: 0.93rem;
-    color: #1A1A1C;
-    margin-bottom: 0.35rem;
-    line-height: 1.4;
-}
-.rc-meta {
-    font-size: 0.76rem;
-    color: #999;
-    margin-bottom: 0.6rem;
-}
-.rc-body {
-    font-size: 0.84rem;
-    color: #555;
-    line-height: 1.75;
-    border-top: 1px solid #F4EFE4;
-    padding-top: 0.7rem;
-}
-
-/* ─ 리포트 헤더 배너 ─ */
-.report-banner {
-    background: linear-gradient(135deg, #1A1A1C 0%, #2A1E14 60%, #1A1A1C 100%);
-    border-radius: 14px;
-    padding: 2rem 2.5rem;
-    margin-bottom: 1.8rem;
-    position: relative;
-    overflow: hidden;
-}
-.report-banner::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: repeating-linear-gradient(
-        -45deg, transparent, transparent 40px,
-        rgba(201,168,76,0.04) 40px, rgba(201,168,76,0.04) 41px
-    );
-}
-.report-banner h2 {
-    font-family: 'DM Serif Display', serif !important;
-    font-size: 1.7rem !important;
-    color: #C9A84C !important;
-    margin-bottom: 0.5rem !important;
-    position: relative;
-}
-.report-banner .rb-meta {
-    font-size: 0.82rem;
-    color: #888 !important;
-    position: relative;
-}
-
-/* ─ 스텝 카드 ─ */
-.step-row {
-    display: flex;
-    align-items: flex-start;
     gap: 1rem;
-    padding: 0.9rem 1.2rem;
-    border-radius: 10px;
-    margin-bottom: 0.5rem;
-    border: 1px solid #EDE9E0;
-    background: #FAFAFA;
-    transition: all 0.2s ease;
-}
-.step-row.s-done  { border-color: #81C784; background: #F1FBF2; }
-.step-row.s-active { border-color: #C9A84C; background: #FDF9F0; }
-.step-circle {
-    width: 30px; height: 30px;
+  }
+  .hz-stat-icon {
+    width: 56px; height: 56px;
     border-radius: 50%;
+    background: var(--gradient);
     display: flex; align-items: center; justify-content: center;
-    font-size: 0.8rem; font-weight: 700;
+    font-size: 1.4rem;
     flex-shrink: 0;
-    background: #EDE9E0; color: #AAA;
-}
-.step-circle.s-done   { background: #4CAF50; color: white; }
-.step-circle.s-active { background: #C9A84C; color: white; }
-.step-info .step-name { font-size: 0.9rem; font-weight: 600; color: #1A1A1C; }
-.step-info .step-desc { font-size: 0.78rem; color: #999; margin-top: 0.1rem; }
-
-/* ─ 메트릭 카드 ─ */
-.m-card {
-    background: #FAFAFA;
-    border: 1px solid #EDE9E0;
-    border-radius: 10px;
-    padding: 1rem 1.2rem;
-    text-align: center;
-}
-.m-card .m-val {
-    font-family: 'DM Serif Display', serif;
-    font-size: 1.8rem;
-    color: #C9A84C;
-    line-height: 1;
-}
-.m-card .m-lbl {
-    font-size: 0.7rem;
-    color: #AAA;
-    margin-top: 0.25rem;
-    letter-spacing: 0.08em;
+  }
+  .hz-stat-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-sub);
     text-transform: uppercase;
-}
+    letter-spacing: 0.04em;
+    margin-bottom: 0.25rem;
+  }
+  .hz-stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-main);
+    line-height: 1.2;
+  }
 
-/* ─ 칩 버튼 ─ */
-.chip-wrap { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
-div.stButton.chip > button {
-    background: #F4EFE4 !important;
-    color: #7A5A1A !important;
-    font-size: 0.78rem !important;
-    font-weight: 500 !important;
-    padding: 0.3rem 0.9rem !important;
-    border-radius: 20px !important;
-    border: 1px solid #DDD5C0 !important;
-    box-shadow: none !important;
-}
-div.stButton.chip > button:hover {
-    background: #EBE2CC !important;
-    transform: none !important;
-    box-shadow: none !important;
-}
+  /* ── 페이지 타이틀 ── */
+  .hz-page-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0 0 0.2rem;
+  }
+  .hz-page-sub {
+    font-size: 0.88rem;
+    color: var(--text-sub);
+    margin: 0 0 1.5rem;
+  }
 
-/* ─ 질문 박스 ─ */
-.q-box {
-    background: #F8F7F4;
-    border: 1px solid #EDE9E0;
-    border-left: 4px solid #C9A84C;
-    border-radius: 0 8px 8px 0;
-    padding: 0.9rem 1.3rem;
-    margin-bottom: 1rem;
+  /* ── 섹션 헤더 ── */
+  .hz-section-header {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-bottom: 0.75rem;
+  }
+
+  /* ── 배지 ── */
+  .hz-badge {
+    display: inline-block;
+    padding: 0.18rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .badge-brand  { background: #EBE9FF; color: var(--brand); }
+  .badge-green  { background: #E6FAF5; color: var(--success); }
+  .badge-orange { background: #FFF3DF; color: var(--warning); }
+  .badge-red    { background: #FFEAEA; color: var(--danger); }
+  .badge-blue   { background: #E3F8FF; color: var(--info); }
+  .badge-gray   { background: var(--border); color: var(--text-body); }
+
+  /* ── 질문 유형 레이블 ── */
+  .qt-pill {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    padding: 0.3rem 0.9rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  /* ── 검색 결과 카드 ── */
+  .result-card {
+    background: var(--bg-card);
+    border-radius: 16px;
+    padding: 1.2rem 1.5rem;
+    border-left: 4px solid var(--brand);
+    box-shadow: 0 2px 12px rgba(67,24,255,0.06);
+    margin-bottom: 0.85rem;
+  }
+  .result-meta {
+    font-size: 0.75rem;
+    color: var(--text-sub);
+    margin-bottom: 0.4rem;
+  }
+  .result-title {
     font-size: 0.92rem;
-    color: #333;
-    line-height: 1.6;
-}
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 0.4rem;
+  }
+  .result-body {
+    font-size: 0.85rem;
+    color: var(--text-body);
+    line-height: 1.65;
+  }
+  .result-score {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--brand);
+    background: #EBE9FF;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+  }
 
-/* ─ 연결 상태 배지 ─ */
-.badge-on  { background:#E8F5E9; color:#2E7D32!important; border:1px solid #A5D6A7;
-             border-radius:20px; padding:0.2rem 0.8rem; font-size:0.75rem; font-weight:600; display:inline-block; }
-.badge-off { background:#FFF8E1; color:#E65100!important; border:1px solid #FFE082;
-             border-radius:20px; padding:0.2rem 0.8rem; font-size:0.75rem; font-weight:600; display:inline-block; }
+  /* ── 리포트 출력 영역 ── */
+  .report-area {
+    background: var(--bg-card);
+    border-radius: 20px;
+    padding: 2rem 2.4rem;
+    border: 1px solid var(--border);
+    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.08);
+    line-height: 1.8;
+    color: var(--text-main);
+  }
+  .report-area h1,h2,h3 { color: var(--text-main); }
 
-/* ─ 구분선 ─ */
-.div-line { height:1px; background:#EDE9E0; margin:1.2rem 0; }
+  /* ── 입력 필드 커스터마이징 ── */
+  .stTextInput > div > div > input,
+  .stTextArea > div > div > textarea {
+    border-radius: 12px !important;
+    border: 1px solid var(--border) !important;
+    background: var(--bg-page) !important;
+    color: var(--text-main) !important;
+    font-size: 0.92rem !important;
+    padding: 0.6rem 1rem !important;
+  }
+  .stTextInput > div > div > input:focus,
+  .stTextArea > div > div > textarea:focus {
+    border-color: var(--brand) !important;
+    box-shadow: 0 0 0 3px rgba(67,24,255,0.12) !important;
+  }
 
-/* ─ 섹션 제목 ─ */
-.sec-title {
-    font-family: 'DM Serif Display', serif;
+  /* ── 버튼 ── */
+  .stButton > button {
+    background: var(--gradient) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.55rem 1.6rem !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    transition: opacity 0.15s ease !important;
+    box-shadow: 0 4px 16px rgba(67,24,255,0.3) !important;
+  }
+  .stButton > button:hover { opacity: 0.88 !important; }
+
+  /* ── 라디오/셀렉트 ── */
+  .stRadio label { color: var(--text-body) !important; font-size: 0.88rem !important; }
+  .stSelectbox > div > div { border-radius: 12px !important; }
+
+  /* ── 구분선 ── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 1.2rem 0; }
+
+  /* ── 사이드바 메뉴 아이템 ── */
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.65rem 1rem;
+    border-radius: 12px;
+    cursor: pointer;
+    margin-bottom: 0.2rem;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--text-body);
+    transition: all 0.15s;
+  }
+  .nav-item.active {
+    background: var(--gradient);
+    color: white;
+    font-weight: 600;
+  }
+  .nav-item:hover:not(.active) {
+    background: var(--bg-page);
+    color: var(--brand);
+  }
+
+  /* ── 로고 ── */
+  .sidebar-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0 1.5rem;
+    margin-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-logo-icon {
+    width: 42px; height: 42px;
+    background: var(--gradient);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
     font-size: 1.3rem;
-    color: #1A1A1C;
-    margin-bottom: 0.3rem;
-}
-.sec-sub { font-size: 0.82rem; color: #AAA; margin-bottom: 1.2rem; }
+  }
+  .sidebar-logo-text {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-main);
+    line-height: 1.2;
+  }
+  .sidebar-logo-sub {
+    font-size: 0.72rem;
+    color: var(--text-sub);
+  }
 
-/* ─ 입력창 ─ */
-.stTextInput input, .stTextArea textarea {
-    border-radius: 8px !important;
-    border-color: #DDD5C0 !important;
-    font-family: 'Noto Sans KR', sans-serif !important;
-}
-.stTextInput input:focus, .stTextArea textarea:focus {
-    border-color: #C9A84C !important;
-    box-shadow: 0 0 0 2px rgba(201,168,76,0.18) !important;
-}
+  /* ── 스피너 오버라이드 ── */
+  .stSpinner > div { color: var(--brand) !important; }
 
-/* ─ 다운로드 버튼 ─ */
-.stDownloadButton > button {
-    background: #1A1A1C !important;
-    color: #C9A84C !important;
-    border: 1px solid #3A3A3C !important;
-    border-radius: 8px !important;
-    font-size: 0.85rem !important;
-    box-shadow: none !important;
-}
-.stDownloadButton > button:hover {
-    background: #2A2A2C !important;
-    transform: none !important;
-    box-shadow: none !important;
-}
+  /* ── expander ── */
+  details { background: var(--bg-page) !important; border-radius: 12px !important; }
+
+  /* ── hide default streamlit elements ── */
+  #MainMenu { visibility: hidden; }
+  footer { visibility: hidden; }
+  /* 헤더 자체는 숨기지 않음 — 사이드바 토글 버튼이 여기 있음 */
+  /* 헤더를 투명하게만 처리 */
+  header { background: transparent !important; box-shadow: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 세션 상태 초기화
-# ══════════════════════════════════════════════════════════════════════════════
-def _init_state():
-    defaults = {
-        "retriever":       None,
-        "strategies":      {},
-        "db_stats":        {},
-        "search_results":  [],
-        "search_query":    "",
-        "report_result":   None,
-        "freeform_result": None,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+# ── 전략 모듈 import (캐싱) ────────────────────────────────────────────────────
 
-_init_state()
+@st.cache_resource(show_spinner=False)
+def load_backend():
+    from src.processing.chunking import chunking_01_recursive as CHUNKING
+    from src.embedding import embedding_01_openai as EMBEDDING
+    from src.vectorstore import vectorstore_01_chroma as VECTORSTORE
+    from src.retriever import router as ROUTER
+    from src.reranker import reranker_01_crossencoder as RERANKER
+    from langchain.schema import Document
+
+    VS_BASE_DIR = PROJECT_ROOT / "data" / "vectorstore"
+    DB_PATH = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME / CHUNKING.STRATEGY_NAME)
+
+    if not VECTORSTORE.exists(DB_PATH):
+        return None, None, None, None, None, None, 0
+
+    embeddings  = EMBEDDING.get_embeddings()
+    vectorstore = VECTORSTORE.load(DB_PATH, embeddings)
+    results     = vectorstore.get(include=["documents", "metadatas"])
+    all_docs    = [
+        Document(page_content=text, metadata=meta)
+        for text, meta in zip(results["documents"], results["metadatas"])
+    ]
+    # router.build_retriever → (ret1_instance, ret2_instance, all_docs) 튜플 반환
+    retriever_tuple = ROUTER.build_retriever(vectorstore, all_docs, k=40)
+    return retriever_tuple, ROUTER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, len(all_docs)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 사이드바
-# ══════════════════════════════════════════════════════════════════════════════
+# ── 헬퍼 ───────────────────────────────────────────────────────────────────────
+
+QUESTION_TYPE_META = {
+    "fact_lookup":       ("🔍", "사실 확인",     "badge-blue"),
+    "coverage_summary":  ("📋", "커버리지 요약",  "badge-green"),
+    "timeline":          ("📅", "타임라인",       "badge-orange"),
+    "broker_comparison": ("⚖️",  "증권사 비교",   "badge-brand"),
+    "risk":              ("⚠️",  "리스크 분석",   "badge-red"),
+    "consensus":         ("🤝", "컨센서스",       "badge-green"),
+    "other":             ("📝", "종합 리포트",    "badge-gray"),
+}
+
+SECTOR_COLORS = {
+    "반도체": "badge-blue",
+    "조선":   "badge-green",
+    "AI인프라":"badge-brand",
+    "자동차": "badge-orange",
+    "바이오": "badge-red",
+}
+
+def score_bar(score: float | str) -> str:
+    try:
+        s = float(score)
+        pct = max(0, min(100, int(s * 100)))
+        color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
+        return f"""
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.4rem;">
+          <div style="flex:1;height:6px;background:#E9EDF7;border-radius:999px;overflow:hidden;">
+            <div style="width:{pct}%;height:100%;background:{color};border-radius:999px;"></div>
+          </div>
+          <span style="font-size:0.72rem;font-weight:700;color:{color};">{s:.3f}</span>
+        </div>"""
+    except Exception:
+        return ""
+
+
+def sector_badge(sector: str) -> str:
+    cls = SECTOR_COLORS.get(sector, "badge-gray")
+    return f'<span class="hz-badge {cls}">{sector}</span>'
+
+
+# ── 사이드바 ───────────────────────────────────────────────────────────────────
+
 with st.sidebar:
-    # 로고
     st.markdown("""
-    <div style="text-align:center; padding:1.8rem 0 1rem;">
-        <div style="font-size:2rem;">📊</div>
-        <div style="font-family:'DM Serif Display',serif; font-size:1.25rem;
-                    color:#C9A84C; letter-spacing:0.03em; margin-top:0.3rem;">
-            리서치 RAG
-        </div>
-        <div style="font-size:0.68rem; color:#555; margin-top:0.25rem;
-                    letter-spacing:0.12em; text-transform:uppercase;">
-            Financial Report Intelligence
-        </div>
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-icon">📊</div>
+      <div>
+        <div class="sidebar-logo-text">ResearchRAG</div>
+        <div class="sidebar-logo-sub">증권사 리포트 분석 시스템</div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # 연결 상태
-    if st.session_state.retriever:
-        st.markdown('<div class="badge-on">● DB 연결됨</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="badge-off">● DB 미연결</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="div-line"></div>', unsafe_allow_html=True)
-
-    # 전략 선택
-    st.markdown("**⚙️ 전략 설정**")
-    st.caption("ingest.py 와 동일한 전략을 선택하세요")
-
-    chunking_key    = st.selectbox("청킹 전략",   list(CHUNKING_OPTIONS.keys()),    index=0)
-    embedding_key   = st.selectbox("임베딩",       list(EMBEDDING_OPTIONS.keys()),   index=0)
-    vectorstore_key = st.selectbox("벡터스토어",   list(VECTORSTORE_OPTIONS.keys()), index=0)
-    retriever_key   = st.selectbox("리트리버",     list(RETRIEVER_OPTIONS.keys()),   index=0)
-    reranker_key    = st.selectbox("리랭커",       list(RERANKER_OPTIONS.keys()),    index=0)
-
-    CHUNKING    = CHUNKING_OPTIONS[chunking_key]
-    EMBEDDING   = EMBEDDING_OPTIONS[embedding_key]
-    VECTORSTORE = VECTORSTORE_OPTIONS[vectorstore_key]
-    RETRIEVER   = RETRIEVER_OPTIONS[retriever_key]
-    RERANKER    = RERANKER_OPTIONS[reranker_key]
-
-    db_path = str(
-        VS_BASE_DIR
-        / VECTORSTORE.STRATEGY_NAME
-        / EMBEDDING.STRATEGY_NAME
-        / CHUNKING.STRATEGY_NAME
+    page = st.radio(
+        "페이지 선택",
+        options=["🏠  대시보드", "💬  질문 · 분석", "📂  최근 리포트"],
+        label_visibility="collapsed",
     )
-    st.caption(f"🗂 `…/{VECTORSTORE.STRATEGY_NAME}/{EMBEDDING.STRATEGY_NAME}/{CHUNKING.STRATEGY_NAME}`")
+    page = page.split("  ", 1)[-1].strip()
 
-    col_k, col_n = st.columns(2)
-    with col_k:
-        k_val     = st.number_input("후보 k",    value=20, min_value=5,  max_value=50, step=5)
-    with col_n:
-        top_n_val = st.number_input("Rerank N", value=8,  min_value=3,  max_value=20, step=1)
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.72rem;font-weight:700;color:var(--text-sub);letter-spacing:0.08em;padding:0 0.3rem 0.4rem;">검색 설정</div>', unsafe_allow_html=True)
 
-    st.markdown("")
+    top_n = st.slider("최종 결과 수 (Top-N)", min_value=3, max_value=20, value=10)
+    show_content = st.toggle("청크 전문 표시", value=False)
 
-    if st.button("🔗  DB 연결하기", use_container_width=True):
-        if not VECTORSTORE.exists(db_path):
-            st.error("DB 없음. 먼저 `uv run python pipeline/ingest.py` 실행")
-        else:
-            with st.spinner("벡터스토어 로드 중..."):
-                from langchain.schema import Document
-                embeddings  = EMBEDDING.get_embeddings()
-                vectorstore = VECTORSTORE.load(db_path, embeddings)
-                results     = vectorstore.get(include=["documents", "metadatas"])
-                all_docs    = [
-                    Document(page_content=t, metadata=m)
-                    for t, m in zip(results["documents"], results["metadatas"])
-                ]
-                retriever = RETRIEVER.build_retriever(vectorstore, all_docs, k=k_val)
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.72rem;font-weight:700;color:var(--text-sub);letter-spacing:0.08em;padding:0 0.3rem 0.4rem;">시스템 정보</div>', unsafe_allow_html=True)
 
-                brokers, sectors = set(), set()
-                for m in results["metadatas"]:
-                    if m.get("source_firm"): brokers.add(m["source_firm"])
-                    if m.get("sector"):      sectors.add(m["sector"])
+    with st.spinner("벡터스토어 로드 중…"):
+        retriever, ROUTER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, total_chunks = load_backend()
 
-                st.session_state.retriever  = retriever
-                st.session_state.strategies = {
-                    "RETRIEVER": RETRIEVER,
-                    "RERANKER":  RERANKER,
-                    "k":         k_val,
-                    "top_n":     top_n_val,
-                }
-                st.session_state.db_stats = {
-                    "chunks":  len(all_docs),
-                    "brokers": sorted(brokers),
-                    "sectors": sorted(sectors),
-                }
-            st.success("연결 완료!")
-            st.rerun()
-
-    # DB 통계
-    if st.session_state.db_stats:
-        stats = st.session_state.db_stats
-        st.markdown('<div class="div-line"></div>', unsafe_allow_html=True)
+    db_ok = retriever is not None
+    if db_ok:
         st.markdown(f"""
-        <div style="display:flex; gap:0.5rem; margin-bottom:0.7rem;">
-            <div class="m-card" style="flex:1;">
-                <div class="m-val">{stats['chunks']:,}</div>
-                <div class="m-lbl">청크</div>
-            </div>
-            <div class="m-card" style="flex:1;">
-                <div class="m-val">{len(stats['brokers'])}</div>
-                <div class="m-lbl">증권사</div>
-            </div>
+        <div style="font-size:0.78rem;color:var(--text-body);padding:0.2rem 0.3rem;">
+          <div>✅ ChromaDB 연결됨</div>
+          <div style="color:var(--text-sub);margin-top:0.3rem;">청크 수: <b style="color:var(--text-main);">{total_chunks:,}</b></div>
+          <div style="color:var(--text-sub);">청킹: <b style="color:var(--text-main);">{CHUNKING.STRATEGY_NAME}</b></div>
+          <div style="color:var(--text-sub);">리트리버: <b style="color:var(--text-main);">router (ensemble ↔ balanced)</b></div>
+          <div style="color:var(--text-sub);">리랭커: <b style="color:var(--text-main);">{RERANKER.STRATEGY_NAME}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.error("ChromaDB 없음 — `pipeline/ingest.py` 실행 필요")
+
+
+# ── 페이지: 대시보드 ───────────────────────────────────────────────────────────
+
+if page == "대시보드":
+    st.markdown('<p class="hz-page-title">대시보드</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hz-page-sub">리서치 리포트 RAG 시스템 현황</p>', unsafe_allow_html=True)
+
+    # 스탯 카드 행
+    c1, c2, c3, c4 = st.columns(4)
+
+    def stat_card(col, icon, label, value):
+        col.markdown(f"""
+        <div class="hz-stat">
+          <div class="hz-stat-icon">{icon}</div>
+          <div>
+            <div class="hz-stat-label">{label}</div>
+            <div class="hz-stat-value">{value}</div>
+          </div>
         </div>
         """, unsafe_allow_html=True)
 
-        if stats["brokers"]:
-            with st.expander("🏦 증권사 목록"):
-                for b in stats["brokers"]:
-                    st.caption(f"• {b}")
-        if stats["sectors"]:
-            with st.expander("📂 섹터 목록"):
-                for s in stats["sectors"]:
-                    st.caption(f"• {s}")
+    stat_card(c1, "📦", "총 청크 수", f"{total_chunks:,}" if db_ok else "—")
+    stat_card(c2, "🏢", "커버 증권사", "12개")
+    stat_card(c3, "📄", "질문 유형", "7가지")
+    stat_card(c4, "🧠", "임베딩 모델", "text-embedding-3-small")
 
+    st.markdown("<br>", unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 메인 헤더
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown("""
-<div style="margin-bottom:1.6rem;">
-    <div style="font-family:'DM Serif Display',serif; font-size:2rem;
-                color:#1A1A1C; line-height:1.2; margin-bottom:0.4rem;">
-        금융 리서치 분석 시스템
-    </div>
-    <div style="font-size:0.88rem; color:#AAA;">
-        증권사 리포트를 AI로 분석 · 종합하여 인사이트를 제공합니다
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    left, right = st.columns([3, 2])
 
-if not st.session_state.retriever:
-    st.info("👈 사이드바에서 전략을 선택하고 **DB 연결하기** 버튼을 눌러주세요.")
-    st.stop()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 탭 레이아웃
-# ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3 = st.tabs(["🔍  키워드 검색", "📊  종합 리포트 생성", "💬  자유형 질문"])
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 1 — 키워드 검색
-# ──────────────────────────────────────────────────────────────────────────────
-with tab1:
-    st.markdown('<div class="sec-title">키워드 검색</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-sub">Hybrid Search (BM25 + Vector) → Cross-Encoder Rerank</div>',
-                unsafe_allow_html=True)
-
-    QUICK = ["반도체 HBM", "AI 인프라", "2차전지", "조선업 수주",
-             "바이오 신약", "금리 인하", "K-방산", "자동차 EV"]
-
-    st.markdown("**빠른 검색**")
-    q_cols = st.columns(len(QUICK))
-    for i, q in enumerate(QUICK):
-        with q_cols[i]:
-            if st.button(q, key=f"qchip_{i}"):
-                st.session_state["_search_prefill"] = q
-
-    search_val = st.session_state.pop("_search_prefill", st.session_state.search_query)
-
-    search_input = st.text_input(
-        "검색어",
-        value=search_val,
-        placeholder="예: 반도체 HBM 공급 업황 전망 2026",
-        label_visibility="collapsed",
-    )
-    st.session_state.search_query = search_input
-
-    col_btn, _, col_n = st.columns([2, 3, 1])
-    with col_n:
-        top_n_s = st.number_input("결과 수", value=5, min_value=1, max_value=20,
-                                  key="search_topn", label_visibility="visible")
-    with col_btn:
-        search_go = st.button("🔍  검색", key="search_go")
-
-    if search_go and search_input.strip():
-        strat = st.session_state.strategies
-        ret   = st.session_state.retriever
-        with st.spinner("검색 중..."):
-            candidates = strat["RETRIEVER"].retrieve(ret, search_input, k=strat["k"])
-            docs       = strat["RERANKER"].rerank(search_input, candidates, top_n=top_n_s)
-        st.session_state.search_results = docs
-        st.session_state.search_query   = search_input
-
-    results = st.session_state.search_results
-    if results:
-        q_used = st.session_state.search_query
-        st.markdown('<div class="div-line"></div>', unsafe_allow_html=True)
-        st.markdown(f"**'{q_used}'** 검색 결과 — **{len(results)}**개")
-        st.markdown("")
-
-        for i, doc in enumerate(results, 1):
-            score   = doc.metadata.get("rerank_score")
-            broker  = doc.metadata.get("source_firm", "-")
-            date    = doc.metadata.get("report_date",  "-")
-            sector  = doc.metadata.get("sector",       "-")
-            title   = (doc.metadata.get("title") or "")[:90]
-            score_s = f"{score:.4f}" if isinstance(score, float) else "—"
-
+    with left:
+        st.markdown('<div class="hz-section-header">지원 질문 유형</div>', unsafe_allow_html=True)
+        for qt, (icon, label, badge) in QUESTION_TYPE_META.items():
             st.markdown(f"""
-            <div class="result-card">
-                <div class="rc-top">
-                    <span class="badge-broker">{broker}</span>
-                    <span class="badge-score">rerank {score_s}</span>
-                </div>
-                <div class="rc-title">{i}. {title or '(제목 없음)'}</div>
-                <div class="rc-meta">📅 {date}&nbsp;&nbsp;|&nbsp;&nbsp;📂 {sector}</div>
-                <div class="rc-body">{doc.page_content[:450]}…</div>
+            <div class="hz-card-sm" style="display:flex;align-items:center;gap:0.8rem;">
+              <span style="font-size:1.2rem;">{icon}</span>
+              <div style="flex:1;">
+                <span class="hz-badge {badge}">{label}</span>
+                <span style="font-size:0.78rem;color:var(--text-sub);margin-left:0.5rem;">{qt}</span>
+              </div>
             </div>
             """, unsafe_allow_html=True)
 
+    with right:
+        st.markdown('<div class="hz-section-header">커버 증권사</div>', unsafe_allow_html=True)
+        brokers = ["하나증권", "키움증권", "DS투자증권", "IBK투자증권", "SK증권",
+                   "교보증권", "대신증권", "유안타증권", "유진투자증권",
+                   "한화투자증권", "iM증권", "한국IR협의회"]
+        for b in brokers:
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0.8rem;
+                        background:var(--bg-card);border-radius:10px;margin-bottom:0.4rem;
+                        border:1px solid var(--border);font-size:0.82rem;color:var(--text-body);">
+              <span style="width:8px;height:8px;background:var(--brand);border-radius:50%;display:inline-block;"></span>
+              {b}
+            </div>
+            """, unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 2 — 종합 리포트 생성 (5-step)
-# ──────────────────────────────────────────────────────────────────────────────
-with tab2:
-    st.markdown('<div class="sec-title">종합 리서치 리포트 생성</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sec-sub">5단계 멀티스텝 체인 → Executive Summary · 시장 현황 · 증권사 비교 · 리스크 분석 · 투자 전략</div>',
-        unsafe_allow_html=True,
-    )
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="hz-section-header">커버 섹터</div>', unsafe_allow_html=True)
+        sectors = ["반도체", "조선", "AI인프라", "자동차", "바이오"]
+        cols = st.columns(3)
+        for i, s in enumerate(sectors):
+            cols[i % 3].markdown(f'<span class="hz-badge {SECTOR_COLORS.get(s,"badge-gray")}" style="margin:0.2rem;">{s}</span>', unsafe_allow_html=True)
 
-    TOPIC_EXAMPLES = ["AI 반도체 업황 및 투자 전략", "2차전지 소재 공급망 분석",
-                      "조선업 수주 회복과 밸류에이션", "바이오 신약 파이프라인 전망"]
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="hz-card">', unsafe_allow_html=True)
+    st.markdown('<div class="hz-section-header">빠른 시작 — 질문 예시</div>', unsafe_allow_html=True)
+    examples = [
+        ("⚖️", "하나증권과 키움증권의 3월 반도체 의견 차이"),
+        ("⚠️", "조선업에서 언급된 리스크 요인 정리해줘"),
+        ("🤝", "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
+        ("📅", "이번 달 반도체 섹터 투자의견 변화"),
+        ("📋", "최근 AI 인프라 리포트 현황 정리해줘"),
+    ]
+    for icon, ex in examples:
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:0.7rem;padding:0.5rem 0.8rem;
+                    background:var(--bg-page);border-radius:10px;margin-bottom:0.35rem;
+                    font-size:0.84rem;color:var(--text-body);">
+          <span>{icon}</span> {ex}
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("**주제 예시**")
-    te_cols = st.columns(len(TOPIC_EXAMPLES))
-    for i, ex in enumerate(TOPIC_EXAMPLES):
-        with te_cols[i]:
-            if st.button(ex, key=f"tex_{i}"):
-                st.session_state["_topic_prefill"] = ex
 
-    topic_val = st.session_state.pop("_topic_prefill", "")
+# ── 페이지: 검색 ───────────────────────────────────────────────────────────────
 
-    report_topic = st.text_input(
-        "분석 주제",
-        value=topic_val,
-        placeholder="예: AI 반도체 HBM 공급 업황 및 투자 전략",
-        label_visibility="collapsed",
-    )
+elif page == "__검색_삭제됨__":
+    st.markdown('<p class="hz-page-title">청크 검색</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hz-page-sub">Hybrid Search (BM25 + Vector) + BGE Cross-Encoder 리랭킹</p>', unsafe_allow_html=True)
 
-    report_go = st.button("📊  리포트 생성", key="report_go")
+    if not db_ok:
+        st.error("ChromaDB가 없습니다. 먼저 `pipeline/ingest.py`를 실행해 주세요.")
+        st.stop()
 
-    if report_go and report_topic.strip():
-        strat = st.session_state.strategies
-        ret   = st.session_state.retriever
+    with st.form("search_form"):
+        query = st.text_input("검색 키워드", placeholder="예: 반도체 업황, 조선 수주, AI 인프라 투자…")
+        submitted = st.form_submit_button("🔎  검색")
 
-        STEP_META = [
-            ("검색",           f"'{report_topic}' 관련 청크 수집 (Hybrid + Rerank)"),
-            ("증권사별 요약",   "각 증권사 핵심 논거 요약 — GPT-4o-mini"),
-            ("컨센서스 분석",   "공통 의견 & 이견 도출 — GPT-4o-mini"),
-            ("인사이트 도출",   "핵심 인사이트 & 포트폴리오 시사점 — GPT-4o"),
-            ("리포트 작성",     "최종 종합 리포트 생성 — GPT-4o"),
-        ]
-
-        def render_steps(active: int, done: set[int], placeholder):
-            html = ""
-            for idx, (name, desc) in enumerate(STEP_META):
-                if idx in done:
-                    cls, c_cls, icon = "s-done", "s-done", "✓"
-                elif idx == active:
-                    cls, c_cls, icon = "s-active", "s-active", "▶"
-                else:
-                    cls, c_cls, icon = "", "", str(idx + 1)
-                html += f"""
-                <div class="step-row {cls}">
-                    <div class="step-circle {c_cls}">{icon}</div>
-                    <div class="step-info">
-                        <div class="step-name">Step {idx+1}. {name}</div>
-                        <div class="step-desc">{desc}</div>
-                    </div>
-                </div>"""
-            placeholder.markdown(html, unsafe_allow_html=True)
-
-        ph = st.empty()
-        done: set[int] = set()
-        (step_retrieve, step_summarize, step_consensus,
-         step_insights, step_final) = REPORT_STEPS
-
-        with st.spinner("리포트 생성 중 (약 2~5분 소요)..."):
-            render_steps(0, done, ph)
-            docs = step_retrieve(
-                ret, report_topic,
-                retrieve_fn = strat["RETRIEVER"].retrieve,
-                rerank_fn   = strat["RERANKER"].rerank,
-                k=strat["k"], top_n=strat["top_n"],
-            )
-            done.add(0)
-
-            render_steps(1, done, ph)
-            summaries = step_summarize(docs, report_topic)
-            done.add(1)
-
-            render_steps(2, done, ph)
-            consensus, differences = step_consensus(summaries, report_topic)
-            done.add(2)
-
-            render_steps(3, done, ph)
-            insights = step_insights(summaries, consensus, differences, report_topic)
-            done.add(3)
-
-            render_steps(4, done, ph)
-            final_md = step_final(report_topic, summaries, consensus, differences, insights)
-            done.add(4)
-            render_steps(-1, done, ph)
-
-        st.session_state.report_result = {
-            "topic":     report_topic,
-            "report":    final_md,
-            "brokers":   list(summaries.keys()),
-            "timestamp": datetime.now().strftime("%Y년 %m월 %d일 %H:%M"),
-        }
-        st.rerun()
-
-    if st.session_state.report_result:
-        res = st.session_state.report_result
+    if submitted and query.strip():
+        with st.spinner("검색 중…"):
+            t0 = time.time()
+            candidates = RETRIEVER.retrieve(retriever, query, k=40)
+            docs       = RERANKER.rerank(query, candidates, top_n=top_n)
+            elapsed    = time.time() - t0
 
         st.markdown(f"""
-        <div class="report-banner">
-            <h2>📊 {res['topic']}</h2>
-            <div class="rb-meta">
-                생성일시: {res['timestamp']} &nbsp;|&nbsp;
-                참고 증권사: {', '.join(res['brokers']) if res.get('brokers') else '—'}
-            </div>
+        <div class="hz-card" style="display:flex;align-items:center;gap:1rem;padding:1rem 1.5rem;">
+          <div style="flex:1;">
+            <span style="font-weight:700;color:var(--text-main);">"{query}"</span>
+            <span style="color:var(--text-sub);font-size:0.82rem;margin-left:0.5rem;">검색 완료</span>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:0.75rem;color:var(--text-sub);">후보 → 최종</div>
+            <div style="font-weight:700;color:var(--brand);">{len(candidates)} → {len(docs)}개</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:0.75rem;color:var(--text-sub);">소요 시간</div>
+            <div style="font-weight:700;color:var(--text-main);">{elapsed:.2f}s</div>
+          </div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown(res["report"])
+        for i, doc in enumerate(docs, 1):
+            score  = doc.metadata.get("rerank_score", "-")
+            broker = doc.metadata.get("source_firm",  doc.metadata.get("broker", "-"))
+            date   = doc.metadata.get("report_date",  "-")
+            sector = doc.metadata.get("sector",        "-")
+            title  = doc.metadata.get("title",         "")
+            content = doc.page_content
 
-        st.markdown("")
-        col_dl1, col_dl2 = st.columns([2, 5])
-        with col_dl1:
-            safe_name = re.sub(r'[^\w가-힣]', '_', res['topic'])[:40]
-            st.download_button(
-                "⬇️  마크다운 다운로드",
-                data      = res["report"].encode("utf-8"),
-                file_name = f"report_{safe_name}_{datetime.now().strftime('%Y%m%d')}.md",
-                mime      = "text/markdown",
-            )
+            sector_html = sector_badge(sector) if sector and sector != "-" else ""
+
+            try:
+                score_val = float(score)
+                pct = max(0, min(100, int(score_val * 100)))
+                bar_color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
+                score_html = f"""
+                <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;">
+                  <div style="width:120px;height:5px;background:#E9EDF7;border-radius:999px;overflow:hidden;">
+                    <div style="width:{pct}%;height:100%;background:{bar_color};border-radius:999px;"></div>
+                  </div>
+                  <span style="font-size:0.72rem;font-weight:700;color:{bar_color};">Rerank {score_val:.3f}</span>
+                </div>"""
+            except Exception:
+                score_html = ""
+
+            preview = content[:350] + ("…" if len(content) > 350 else "")
+
+            st.markdown(f"""
+            <div class="result-card">
+              <div class="result-meta">
+                <b style="color:var(--text-main);">#{i}</b>
+                &nbsp;·&nbsp; 🏢 {broker}
+                &nbsp;·&nbsp; 📅 {date}
+                &nbsp;&nbsp; {sector_html}
+              </div>
+              {'<div class="result-title">' + title[:60] + '</div>' if title else ''}
+              {score_html}
+              {'<div class="result-body" style="margin-top:0.6rem;">' + preview + '</div>' if show_content else ''}
+            </div>
+            """, unsafe_allow_html=True)
+
+            if show_content and len(content) > 350:
+                with st.expander("전문 보기"):
+                    st.text(content)
+
+    elif submitted:
+        st.warning("검색 키워드를 입력해 주세요.")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# TAB 3 — 자유형 질문
-# ──────────────────────────────────────────────────────────────────────────────
-with tab3:
-    st.markdown('<div class="sec-title">자유형 질문</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sec-sub">질문 유형 자동 분류 → 다중 쿼리 검색 → 시장 분석 · 증권사별 관점 · 주요 논거 포함 답변</div>',
-        unsafe_allow_html=True,
-    )
+# ── 페이지: 질문 · 분석 ────────────────────────────────────────────────────────
 
-    FREEFORM_EX = [
-        ("🏦", "하나증권과 키움증권의 반도체 의견 차이를 설명해줘"),
-        ("📅", "이번 달 AI 섹터 투자의견 변화 알려줘"),
-        ("⚠️", "조선업에서 언급된 리스크 요인 정리해줘"),
-        ("💰", "각 증권사 목표주가 상향 근거가 뭐야"),
-        ("🤝", "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
+elif page == "질문 · 분석":
+    st.markdown('<p class="hz-page-title">질문 · 분석 리포트</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hz-page-sub">자유형 질문을 입력하면 유형을 자동 감지해 분석 리포트를 생성합니다.</p>', unsafe_allow_html=True)
+
+    if not db_ok:
+        st.error("ChromaDB가 없습니다. 먼저 `pipeline/ingest.py`를 실행해 주세요.")
+        st.stop()
+
+    from src.reportcreator.freeform_chain import answer_question
+
+    # 예시 질문 버튼
+    st.markdown('<div class="hz-section-header">빠른 질문 선택</div>', unsafe_allow_html=True)
+    examples = [
+        "하나증권과 키움증권의 3월 반도체 의견 차이",
+        "조선업에서 언급된 리스크 요인 정리해줘",
+        "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야",
+        "이번 달 반도체 섹터 투자의견 변화",
     ]
+    ex_cols = st.columns(len(examples))
+    preset_q = ""
+    for col, ex in zip(ex_cols, examples):
+        if col.button(ex[:18] + "…", key=f"ex_{ex}"):
+            preset_q = ex
 
-    TYPE_LABEL = {
-        "broker_comparison": "🏦 증권사 비교",
-        "timeline":          "📅 타임라인",
-        "valuation":         "💰 밸류에이션",
-        "risk":              "⚠️ 리스크",
-        "consensus":         "🤝 컨센서스",
-        "other":             "💬 기타",
-    }
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    st.markdown("**질문 예시**")
-    ex_cols = st.columns(len(FREEFORM_EX))
-    for i, (icon, ex) in enumerate(FREEFORM_EX):
-        with ex_cols[i]:
-            if st.button(f"{icon} {ex[:12]}…", key=f"fex_{i}"):
-                st.session_state["_freeform_prefill"] = ex
+    with st.form("ask_form"):
+        question = st.text_area(
+            "질문 입력",
+            value=preset_q,
+            placeholder="예: 하나증권과 키움증권의 3월 반도체 의견 차이를 설명해줘",
+            height=100,
+        )
+        submitted = st.form_submit_button("💬  분석 리포트 생성")
 
-    fq_val = st.session_state.pop("_freeform_prefill", "")
+    if submitted and question.strip():
+        progress_bar = st.progress(0, text="질문 유형 분류 중…")
 
-    freeform_q = st.text_area(
-        "질문 입력",
-        value=fq_val,
-        height=110,
-        placeholder=(
-            "자유롭게 질문하세요.\n"
-            "예: 하나증권과 키움증권의 3월 반도체 의견 차이를 설명해줘"
-        ),
-        label_visibility="collapsed",
-    )
-
-    freeform_go = st.button("💬  질문하기", key="freeform_go")
-
-    if freeform_go and freeform_q.strip():
-        strat = st.session_state.strategies
-        ret   = st.session_state.retriever
-
-        with st.status("질문 분석 중...", expanded=True) as status:
-            st.write("📌 Step 1 — 질문 유형 분류 중...")
-            # answer_question 내부에서 Step 1~4 수행
+        with st.spinner("분석 리포트 생성 중 (수십 초 소요)…"):
+            t0 = time.time()
+            progress_bar.progress(20, text="문서 검색 중…")
             result = answer_question(
-                ret,
-                freeform_q,
-                retrieve_fn = strat["RETRIEVER"].retrieve,
-                rerank_fn   = strat["RERANKER"].rerank,
+                retriever, question,
+                retrieve_fn=lambda r, q, k: ROUTER.retrieve(r, q, k=k),
+                rerank_fn=lambda q, docs, top_n: RERANKER.rerank(q, docs, top_n=top_n),
             )
-            status.update(label="분석 완료!", state="complete", expanded=False)
+            elapsed = time.time() - t0
+            progress_bar.progress(100, text="완료!")
 
-        st.session_state.freeform_result = result
-        st.rerun()
+        qt   = result.get("question_type", "other")
+        icon, label, badge = QUESTION_TYPE_META.get(qt, ("📝", "분석", "badge-gray"))
+        sources = result.get("sources", [])
 
-    if st.session_state.freeform_result:
-        res = st.session_state.freeform_result
+        # 메타 요약 카드
+        st.markdown(f"""
+        <div class="hz-card" style="display:flex;flex-wrap:wrap;gap:1.2rem;align-items:center;padding:1rem 1.5rem;">
+          <div>
+            <div style="font-size:0.72rem;color:var(--text-sub);margin-bottom:0.25rem;">질문 유형</div>
+            <span class="hz-badge {badge}" style="font-size:0.82rem;padding:0.3rem 0.8rem;">
+              {icon} {label}
+            </span>
+          </div>
+          <div>
+            <div style="font-size:0.72rem;color:var(--text-sub);margin-bottom:0.25rem;">참고 증권사</div>
+            <div style="font-size:0.85rem;font-weight:600;color:var(--text-main);">
+              {', '.join(sources) if sources else '—'}
+            </div>
+          </div>
+          <div style="margin-left:auto;text-align:right;">
+            <div style="font-size:0.72rem;color:var(--text-sub);">생성 시간</div>
+            <div style="font-weight:700;color:var(--brand);">{elapsed:.1f}s</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        # 메트릭 행
-        mc1, mc2, mc3 = st.columns(3)
-        mc1.markdown(f"""
-        <div class="m-card">
-            <div class="m-val" style="font-size:1.2rem;">{TYPE_LABEL.get(res['question_type'], res['question_type'])}</div>
-            <div class="m-lbl">질문 유형</div>
-        </div>""", unsafe_allow_html=True)
-        mc2.markdown(f"""
-        <div class="m-card">
-            <div class="m-val">{res['chunk_count']}</div>
-            <div class="m-lbl">참고 청크</div>
-        </div>""", unsafe_allow_html=True)
-        mc3.markdown(f"""
-        <div class="m-card">
-            <div class="m-val">{len(res['sources'])}</div>
-            <div class="m-lbl">참고 증권사</div>
-        </div>""", unsafe_allow_html=True)
+        # 리포트 본문
+        st.markdown('<div class="report-area">', unsafe_allow_html=True)
+        st.markdown(result["answer"])
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown("")
-        st.markdown(f'<div class="q-box"><b>Q.</b> {res["question"]}</div>',
-                    unsafe_allow_html=True)
-        st.markdown("---")
-        st.markdown(res["answer"])
+        # 다운로드
+        st.download_button(
+            "📥  리포트 저장 (.md)",
+            data=result["answer"],
+            file_name=f"report_{qt}_{int(t0)}.md",
+            mime="text/markdown",
+        )
 
-        if res["sources"]:
-            with st.expander("📋 참고 증권사"):
-                for s in res["sources"]:
-                    st.caption(f"• {s}")
+        # 참조 청크 출처
+        retrieved_docs = result.get("docs", [])
+        if retrieved_docs:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown('<div class="hz-section-header">📎 참조 청크 출처</div>', unsafe_allow_html=True)
+            for i, doc in enumerate(retrieved_docs, 1):
+                broker  = doc.metadata.get("source_firm", doc.metadata.get("broker", "-"))
+                date    = doc.metadata.get("report_date", "-")
+                sector  = doc.metadata.get("sector", "-")
+                title   = doc.metadata.get("title", "")
+                score   = doc.metadata.get("rerank_score", None)
+                content = doc.page_content
 
-        st.markdown("")
-        col_fdl, _ = st.columns([2, 5])
-        with col_fdl:
-            safe_q = re.sub(r'[^\w가-힣]', '_', res['question'])[:30]
-            st.download_button(
-                "⬇️  답변 다운로드",
-                data      = res["answer"].encode("utf-8"),
-                file_name = f"freeform_{safe_q}_{datetime.now().strftime('%Y%m%d_%H%M')}.md",
-                mime      = "text/markdown",
-            )
+                score_html = ""
+                if score is not None:
+                    try:
+                        s = float(score)
+                        pct = max(0, min(100, int(s * 100)))
+                        bar_color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
+                        score_html = f'<span style="font-size:0.7rem;font-weight:700;color:{bar_color};background:{bar_color}22;padding:0.1rem 0.45rem;border-radius:999px;">score {s:.3f}</span>'
+                    except Exception:
+                        pass
+
+                sector_html = sector_badge(sector) if sector and sector != "-" else ""
+                preview = content[:200] + ("…" if len(content) > 200 else "")
+
+                with st.expander(f"#{i}  {broker}  ·  {date}  {'· ' + title[:30] if title else ''}"):
+                    st.markdown(f"""
+                    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;align-items:center;">
+                      {sector_html} {score_html}
+                    </div>
+                    <div style="font-size:0.83rem;color:var(--text-body);line-height:1.7;">{preview}</div>
+                    """, unsafe_allow_html=True)
+                    if len(content) > 200:
+                        if st.toggle("전문 보기", key=f"chunk_full_{i}"):
+                            st.text(content)
+
+    elif submitted:
+        st.warning("질문을 입력해 주세요.")
+
+
+# ── 페이지: 최근 리포트 ─────────────────────────────────────────────────────────
+
+elif page == "최근 리포트":
+    st.markdown('<p class="hz-page-title">생성된 리포트</p>', unsafe_allow_html=True)
+    st.markdown('<p class="hz-page-sub">data/reports_output/ 폴더에 저장된 리포트 목록</p>', unsafe_allow_html=True)
+
+    reports_dir = PROJECT_ROOT / "data" / "reports_output"
+    md_files = sorted(reports_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True) if reports_dir.exists() else []
+
+    if not md_files:
+        st.markdown("""
+        <div class="hz-card" style="text-align:center;padding:3rem;">
+          <div style="font-size:2.5rem;margin-bottom:0.8rem;">📂</div>
+          <div style="font-size:1rem;font-weight:600;color:var(--text-main);">아직 생성된 리포트가 없습니다</div>
+          <div style="font-size:0.85rem;color:var(--text-sub);margin-top:0.4rem;">
+            질문·분석 탭에서 리포트를 생성해보세요.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div style="font-size:0.82rem;color:var(--text-sub);margin-bottom:1rem;">총 {len(md_files)}개의 리포트</div>', unsafe_allow_html=True)
+        for f in md_files:
+            mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))
+            size_kb = f.stat().st_size / 1024
+            with st.expander(f"📄 {f.name}  —  {mtime}  ({size_kb:.1f} KB)"):
+                content = f.read_text(encoding="utf-8", errors="replace")
+                st.markdown(content)
+                st.download_button(
+                    "📥 다운로드",
+                    data=content,
+                    file_name=f.name,
+                    mime="text/markdown",
+                    key=f"dl_{f.name}",
+                )

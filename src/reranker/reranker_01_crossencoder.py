@@ -1,51 +1,34 @@
 """
-src/reranker.py
-Cross-Encoder Reranker 모듈 (BGE Reranker)
+src/reranker/reranker_01_crossencoder.py
+FlashRank 기반 Reranker (ONNX, PyTorch 불필요)
 
-Retriever가 가져온 후보 문서들을
-Cross-Encoder로 재점수화해서 진짜 관련있는 문서만 추림
-
-사전 설치:
-    pip install sentence-transformers
+Windows에서 sentence-transformers CrossEncoder 사용 시 PyTorch/OpenMP 충돌로
+Segmentation Fault 가 발생해, 동일 품질의 FlashRank(ONNX)로 교체.
 
 모델:
-    BAAI/bge-reranker-v2-m3  → 다국어 지원 (한국어 포함), 무료, 로컬 실행
-    BAAI/bge-reranker-large  → 영어 위주, 더 빠름
+    ms-marco-MultiBERT-L-12  → 다국어 지원 (한국어 포함), ONNX 실행
 """
 STRATEGY_NAME = "reranker_01_crossencoder"
 
 from langchain.schema import Document
 
-
-# ── 설정 ──────────────────────────────────────────────────────────────────────
-
-DEFAULT_MODEL  = "BAAI/bge-reranker-v2-m3"
-DEFAULT_TOP_N  = 8
-SCORE_THRESHOLD = 0.1   # 이 점수 이하는 완전히 관련없는 문서로 제거
+DEFAULT_MODEL   = "ms-marco-MultiBERT-L-12"
+DEFAULT_TOP_N   = 8
+SCORE_THRESHOLD = 0.0   # flashrank 점수 범위가 달라 threshold 완화
 
 
-# ── Reranker ──────────────────────────────────────────────────────────────────
-
-class BGEReranker:
-    """
-    BGE Cross-Encoder Reranker
-    - 쿼리 + 문서를 동시에 입력해서 관련도 점수 계산
-    - Bi-Encoder(벡터 유사도)보다 훨씬 정확
-    - 최초 1회 모델 로딩 후 재사용 (캐싱)
-    """
-
+class FlashReranker:
     def __init__(self, model_name: str = DEFAULT_MODEL):
         self.model_name = model_name
-        self._model     = None   # lazy loading
+        self._ranker    = None
 
     def _load_model(self):
-        """최초 사용 시 모델 로딩 (이후 캐싱)"""
-        if self._model is None:
-            from sentence_transformers import CrossEncoder
+        if self._ranker is None:
+            from flashrank import Ranker
             print(f"Reranker 모델 로딩 중: {self.model_name}")
-            self._model = CrossEncoder(self.model_name)
+            self._ranker = Ranker(model_name=self.model_name)
             print("Reranker 모델 로딩 완료")
-        return self._model
+        return self._ranker
 
     def rerank(
         self,
@@ -54,63 +37,47 @@ class BGEReranker:
         top_n:     int   = DEFAULT_TOP_N,
         threshold: float = SCORE_THRESHOLD,
     ) -> list[Document]:
-        """
-        문서 재순위화
-        query: 검색 쿼리
-        docs:  Retriever가 가져온 후보 문서들
-        top_n: 최종 반환할 문서 수
-        threshold: 최소 관련도 점수 (이하 제거)
-
-        Returns: 재순위화된 Document 리스트 (score 메타데이터 포함)
-        """
         if not docs:
             return []
 
-        model = self._load_model()
+        from flashrank import RerankRequest
 
-        # Cross-Encoder 입력: [(query, doc_text), ...]
-        pairs  = [(query, doc.page_content) for doc in docs]
-        scores = model.predict(pairs)
+        ranker   = self._load_model()
+        passages = [
+            {"id": i, "text": doc.page_content}
+            for i, doc in enumerate(docs)
+        ]
+        req     = RerankRequest(query=query, passages=passages)
+        results = ranker.rerank(req)
 
-        # 점수 기준 정렬
-        scored = sorted(
-            zip(scores, docs),
-            key    = lambda x: x[0],
-            reverse= True,
-        )
-
-        # threshold 필터링 + top_n 적용
-        results = []
-        for score, doc in scored:
+        out = []
+        for item in results:
+            score = float(item.get("score", 0.0))
             if score < threshold:
                 continue
-            # 점수를 메타데이터에 추가
-            doc.metadata["rerank_score"] = round(float(score), 4)
-            results.append(doc)
-            if len(results) >= top_n:
+            doc = docs[item["id"]]
+            doc.metadata["rerank_score"] = round(score, 4)
+            out.append(doc)
+            if len(out) >= top_n:
                 break
 
-        return results
+        return out
 
 
-# ── 싱글턴 인스턴스 (모델 재로딩 방지) ──────────────────────────────────────────
+_reranker_instance: FlashReranker | None = None
 
-_reranker_instance: BGEReranker | None = None
-
-def get_reranker(model_name: str = DEFAULT_MODEL) -> BGEReranker:
-    """싱글턴 Reranker 반환 (모델을 한 번만 로딩)"""
+def get_reranker(model_name: str = DEFAULT_MODEL) -> FlashReranker:
     global _reranker_instance
     if _reranker_instance is None or _reranker_instance.model_name != model_name:
-        _reranker_instance = BGEReranker(model_name)
+        _reranker_instance = FlashReranker(model_name)
     return _reranker_instance
 
 
 def rerank(
-    query:     str,
-    docs:      list[Document],
-    top_n:     int   = DEFAULT_TOP_N,
-    threshold: float = SCORE_THRESHOLD,
-    model_name: str  = DEFAULT_MODEL,
+    query:      str,
+    docs:       list[Document],
+    top_n:      int   = DEFAULT_TOP_N,
+    threshold:  float = SCORE_THRESHOLD,
+    model_name: str   = DEFAULT_MODEL,
 ) -> list[Document]:
-    """편의 함수: reranker 인스턴스 없이 바로 호출"""
     return get_reranker(model_name).rerank(query, docs, top_n, threshold)
