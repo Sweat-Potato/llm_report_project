@@ -66,6 +66,8 @@ FIRM_ALIASES = {
     "DS증권": "DS투자증권",
     "ds투자증권": "DS투자증권",
     "ds증권": "DS투자증권",
+    "대신증권": "DS투자증권",
+    "대신": "DS투자증권",
 
     # IBK투자증권
     "IBK투자증권": "IBK투자증권",
@@ -89,9 +91,6 @@ FIRM_ALIASES = {
     "교보증권": "교보증권",
     "교보": "교보증권",
 
-    # 대신증권
-    "대신증권": "대신증권",
-    "대신": "대신증권",
 
     # 유안타증권
     "유안타증권": "유안타증권",
@@ -240,7 +239,7 @@ def build_retriever(
     """
     ret1_instance = ret1.build_retriever(vectorstore, all_docs, k=k)
     ret2_instance = ret2.build_retriever(vectorstore, all_docs, k=k)
-    return ret1_instance, ret2_instance, all_docs
+    return ret1_instance, ret2_instance, all_docs, vectorstore
 
 
 def retrieve(
@@ -273,7 +272,7 @@ def retrieve_with_meta(
       intent: "balanced" | "ensemble"
       firms:  언급된 증권사 목록 (없으면 [])
     """
-    ret1_instance, ret2_instance, all_docs = retrievers
+    ret1_instance, ret2_instance, all_docs, vectorstore = retrievers
 
     # 1. 쿼리 분석
     intent, firms = analyze_query(query)
