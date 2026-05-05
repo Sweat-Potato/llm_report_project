@@ -8,14 +8,14 @@ eval/02_eval_chunk.py
   - std_size      : 크기 표준편차 (편차가 클수록 불균일)
   - min_size      : 최소 청크 크기
   - max_size      : 최대 청크 크기
-  - short_ratio   : 짧은 청크 비율 (< SHORT_THRESHOLD 자)
-  - long_ratio    : 긴 청크 비율  (> LONG_THRESHOLD 자)
+  - short_ratio   : 최종 생성된 청크 중 짧은 청크 비율 (< SHORT_CHUNK_THRESHOLD 자)
+  - long_ratio    : 최종 생성된 청크 중 긴 청크 비율  (> LONG_CHUNK_THRESHOLD 자)
   - total_chars   : 전체 문자 수 (커버리지 기준)
 
 ★ 설정 블록 — 이곳만 수정 ★
   STRATEGIES      : 비교할 청킹 전략 리스트
-  SHORT_THRESHOLD : 이 이하는 "짧은 청크"로 분류
-  LONG_THRESHOLD  : 이 이상은 "긴 청크"로 분류
+  SHORT_CHUNK_THRESHOLD : 최종 청크 길이가 이 값 미만이면 "짧은 청크"로 분류
+  LONG_CHUNK_THRESHOLD  : 최종 청크 길이가 이 값 초과이면 "긴 청크"로 분류
 
 실행:
   uv run python eval/02_eval_chunk.py
@@ -39,8 +39,11 @@ from src.processing.chunking import chunking_03_hybrid    as C3
 from src.processing.chunking import chunking_04_sentence  as C4
 
 STRATEGIES      = [C1, C3, C4]   # 비교할 전략 리스트
-SHORT_THRESHOLD = 100             # 이 이하는 "짧은 청크" (정보 부족 우려)
-LONG_THRESHOLD  = 2000            # 이 이상은 "긴 청크"  (LLM 컨텍스트 낭비 우려)
+
+# 주의: 아래 threshold는 "최종 생성된 청크 길이"를 평가하기 위한 기준입니다.
+# 각 청킹 전략 내부의 SHORT_THRESHOLD / LONG_THRESHOLD(원문 길이 분기 기준)와는 별개입니다.
+SHORT_CHUNK_THRESHOLD = 100       # 최종 청크가 이 값 미만이면 "짧은 청크" (정보 부족 우려)
+LONG_CHUNK_THRESHOLD  = 2000      # 최종 청크가 이 값 초과이면 "긴 청크"  (LLM 컨텍스트 낭비 우려)
 
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -63,8 +66,8 @@ def _evaluate_strategy(strategy, reports: list[dict]) -> dict:
         return {"strategy": strategy.STRATEGY_NAME}
 
     series = pd.Series(sizes)
-    short_count = (series < SHORT_THRESHOLD).sum()
-    long_count  = (series > LONG_THRESHOLD).sum()
+    short_count = (series < SHORT_CHUNK_THRESHOLD).sum()
+    long_count  = (series > LONG_CHUNK_THRESHOLD).sum()
 
     return {
         "strategy"    : strategy.STRATEGY_NAME,
@@ -84,8 +87,8 @@ def _print_strategy_stats(stats: dict) -> None:
     print(f"    청크 수   : {stats['chunk_count']:,}개")
     print(f"    평균 크기 : {stats['avg_size']}자  (±{stats['std_size']})")
     print(f"    범위      : {stats['min_size']}자 ~ {stats['max_size']}자")
-    print(f"    짧은 청크 : {stats['short_ratio']*100:.1f}%  (<{SHORT_THRESHOLD}자)")
-    print(f"    긴 청크   : {stats['long_ratio']*100:.1f}%   (>{LONG_THRESHOLD}자)")
+    print(f"    짧은 청크 : {stats['short_ratio']*100:.1f}%  (<{SHORT_CHUNK_THRESHOLD}자)")
+    print(f"    긴 청크   : {stats['long_ratio']*100:.1f}%   (>{LONG_CHUNK_THRESHOLD}자)")
     print(f"    전체 문자 : {stats['total_chars']:,}자")
 
 

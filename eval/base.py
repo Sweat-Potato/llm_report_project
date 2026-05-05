@@ -130,15 +130,42 @@ def save_results(df: pd.DataFrame, path: Path, label: str = "결과") -> None:
 def print_score_summary(scores: dict[str, float], label: str = "평가 점수") -> None:
     """
     점수 딕셔너리를 이쁘게 출력.
-    0.8 이상 ✅ / 0.6~0.8 ⚠️ / 0.6 미만 ❌
+    list 값은 평균으로 변환 후 평가
     """
+
     print(f"\n{'='*55}")
     print(f"📊 {label}")
     print(f"{'='*55}")
+
+    processed_scores = {}
+
     for key, val in scores.items():
+
+        # 🔥 list → 평균 변환
+        if isinstance(val, list):
+            numeric_vals = [v for v in val if isinstance(v, (int, float))]
+            if numeric_vals:
+                val = sum(numeric_vals) / len(numeric_vals)
+            else:
+                print(f"  ⚠️ {key:30s}: 유효한 값 없음")
+                continue
+
+        # 🔥 숫자 아닌 경우 skip
+        if not isinstance(val, (int, float)):
+            print(f"  ⚠️ {key:30s}: {val}")
+            continue
+
+        processed_scores[key] = val
+
         status = "✅" if val > 0.8 else "⚠️" if val > 0.6 else "❌"
         print(f"  {status} {key:30s}: {val:.3f}")
-    overall = sum(scores.values()) / len(scores) if scores else 0
+
+    # 🔥 전체 평균
+    if processed_scores:
+        overall = sum(processed_scores.values()) / len(processed_scores)
+    else:
+        overall = 0
+
     print(f"{'─'*55}")
     print(f"  🎯 {'전체 평균':30s}: {overall:.3f}")
     print(f"{'='*55}")
