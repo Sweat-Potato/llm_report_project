@@ -372,7 +372,7 @@ st.markdown("""
   }
 
   /* ── 프로그레스 ── */
-  .stProgress > div > div { background: var(--orange) !important; }
+  .stProgress > div > div { background: var(--canvas) !important; }
 
   /* ── 숨김 ── */
   #MainMenu { visibility: hidden; }
