@@ -37,10 +37,16 @@ def get_generator_llm():
     """
     TestsetGenerator 용 LLM 래퍼.
     RAGAS 내부에서 질문·정답 생성 및 품질 검증에 사용.
+
+    주의: .bind(system=...) 사용 금지.
+    → RunnableBinding 을 반환해 RAGAS 가 .temperature 접근 시 ValueError 발생.
+    한국어 강제는 RAGAS의 synthesizer_prompt 커스터마이징 대신,
+    입력 청크가 한국어이면 자연스럽게 한국어 Q&A 가 생성됨.
     """
     from langchain_openai import ChatOpenAI
     from ragas.llms import LangchainLLMWrapper
-    return LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini"))
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    return LangchainLLMWrapper(llm)
 
 
 def get_generator_embeddings():
@@ -62,6 +68,10 @@ def get_evaluator_llm():
     RAGAS evaluate() 용 LLM 래퍼.
     context_precision, context_recall, faithfulness 계산에 사용.
     temperature=0 으로 일관된 점수 확보.
+
+    주의: 시스템 프롬프트 주입 금지.
+    RAGAS는 내부적으로 "1"/"0" 등 특정 포맷으로 LLM 응답을 파싱함.
+    한국어 강제 프롬프트를 넣으면 파싱 실패 → 모든 지표 NaN.
     """
     from langchain_openai import ChatOpenAI
     from ragas.llms import LangchainLLMWrapper
@@ -114,6 +124,15 @@ def load_testset(path: Path = TESTSET_PATH):
     if empty:
         print(f"  [경고] reference_contexts 복원 실패 {empty}/{before}행 → 빈 리스트로 대체")
         print(f"         해당 행은 context_recall 점수가 0으로 계산됩니다")
+
+    # reference_contexts 컬럼이 없는 경우 대비 (RAGAS 버전에 따라 컬럼명 다름)
+    if "reference_contexts" not in dataset.column_names:
+        print(f"  [경고] reference_contexts 컬럼 없음 → context_recall 계산 불가")
+        print(f"         testset을 재생성하거나 RAGAS 버전을 확인하세요.")
+
+    # reference 컬럼 없으면 경고 (context_precision, faithfulness 에 필요)
+    if "reference" not in dataset.column_names:
+        print(f"  [경고] reference 컬럼 없음 → context_precision / faithfulness 계산 불가")
 
     return dataset
 

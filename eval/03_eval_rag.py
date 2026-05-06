@@ -51,8 +51,10 @@ from src.embedding import embedding_01_openai as EMBEDDING
 from src.vectorstore import vectorstore_01_chroma as VECTORSTORE
 
 # ── 리랭커 전략 ────────────────────────────────────────────────────────────────
-from src.reranker import reranker_01_crossencoder as RERANKER
-# from src.reranker import reranker_02_cohere as RERANKER
+# HuggingFace 접속 가능한 환경: reranker_01_crossencoder
+
+# from src.reranker import reranker_01_crossencoder as RERANKER
+from src.reranker import reranker_02_cohere as RERANKER
 
 # ── 라우터 (리트리버 자동 선택) ───────────────────────────────────────────────
 from src.retriever import router as ROUTER
@@ -194,11 +196,12 @@ def _build_eval_dataset(
     """
     dataset = testset
 
-    for col in ("answer", "retrieved_contexts"):
+    # RAGAS 0.4.x 기준 컬럼명: response (구버전의 answer 아님)
+    for col in ("response", "answer", "retrieved_contexts"):
         if col in dataset.column_names:
             dataset = dataset.remove_columns([col])
 
-    dataset = dataset.add_column("answer", answers)
+    dataset = dataset.add_column("response", answers)
     dataset = dataset.add_column("retrieved_contexts", retrieved_contexts)
     return dataset
 
@@ -243,18 +246,43 @@ def main():
     print("\n[STEP 5] RAGAS 평가 실행...")
     print("  (LLM 으로 각 지표를 계산합니다 — 수 분 소요)")
     result = evaluate(
-        dataset    = eval_dataset,
-        metrics    = [context_precision, context_recall, faithfulness, answer_relevancy],
-        llm        = get_evaluator_llm(),
-        embeddings = get_evaluator_embeddings(),
+        dataset          = eval_dataset,
+        metrics          = [context_precision, context_recall, faithfulness, answer_relevancy],
+        llm              = get_evaluator_llm(),
+        embeddings       = get_evaluator_embeddings(),
+        raise_exceptions = False,   # 개별 샘플 실패 시 NaN 으로 처리 (전체 중단 방지)
     )
 
     # STEP 6: 결과 출력
+    import math, numpy as np
+    result_df_raw = result.to_pandas()
+
+    print("\n  [DEBUG] 샘플별 원점수 (NaN 개수 확인):")
+    metric_keys = ["context_precision", "context_recall", "faithfulness", "answer_relevancy"]
+    for key in metric_keys:
+        if key in result_df_raw.columns:
+            col      = result_df_raw[key]
+            nan_cnt  = col.isna().sum()
+            mean_val = col.mean()
+            print(f"    {key:30s}: mean={mean_val:.3f}  NaN={nan_cnt}/{len(col)}")
+        else:
+            print(f"    {key:30s}: 컬럼 없음")
+
+    def _safe_score(key: str) -> float:
+        """NaN 개수 로그 출력 후 유효 샘플 평균 반환 (전체 NaN 이면 0.0)"""
+        try:
+            if key in result_df_raw.columns:
+                valid = result_df_raw[key].dropna()
+                return float(valid.mean()) if len(valid) > 0 else 0.0
+            return float(result[key])
+        except Exception:
+            return 0.0
+
     scores = {
-        "context_precision": result["context_precision"],
-        "context_recall"   : result["context_recall"],
-        "faithfulness"     : result["faithfulness"],
-        "answer_relevancy" : result["answer_relevancy"],
+        "context_precision": _safe_score("context_precision"),
+        "context_recall"   : _safe_score("context_recall"),
+        "faithfulness"     : _safe_score("faithfulness"),
+        "answer_relevancy" : _safe_score("answer_relevancy"),
     }
     print_score_summary(scores, label=f"RAG 평가 결과 ({label})")
 

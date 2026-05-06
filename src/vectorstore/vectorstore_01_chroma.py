@@ -10,15 +10,20 @@ ChromaDB 벡터스토어 전략 (영구 저장)
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from langchain.schema import Document
-from langchain_community.vectorstores import Chroma
+try:
+    from langchain_chroma import Chroma
+except ImportError:
+    from langchain_community.vectorstores import Chroma  # fallback
 
 # ── 설정 ────────────────────────────────────────
 STRATEGY_NAME   = "chroma"
 COLLECTION_NAME = "research_reports"
-BATCH_SIZE      = 100   # OpenAI API 토큰 한도 대응
+BATCH_SIZE      = 50    # OpenAI TPM 한도 대응 (100→50으로 축소)
+BATCH_SLEEP_SEC = 1.0   # 배치 간 슬립 (TPM 누적 방지)
 
 
 def build(docs: list[Document], embeddings, db_path: str) -> Chroma:
@@ -49,6 +54,10 @@ def build(docs: list[Document], embeddings, db_path: str) -> Chroma:
             )
         else:
             vectorstore.add_documents(batch)
+
+        # TPM 누적 방지: 배치 사이 슬립 (마지막 배치 제외)
+        if i + BATCH_SIZE < len(docs):
+            time.sleep(BATCH_SLEEP_SEC)
 
     count = vectorstore._collection.count()
     print(f"  ChromaDB 저장 완료 (총 {count}개 청크)")

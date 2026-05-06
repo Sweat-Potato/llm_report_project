@@ -20,10 +20,19 @@ from src.processing.chunking.base import Chunk
 STRATEGY_NAME = "openai_text-embedding-3-small"
 EMBED_MODEL   = "text-embedding-3-small"
 
+# 한 번에 보낼 텍스트 수 제한 (TPM 초과 방지)
+# OpenAI SDK가 429 발생 시 max_retries 횟수만큼 지수 백오프로 자동 재시도
+CHUNK_SIZE  = 50
+MAX_RETRIES = 6
+
 
 def get_embeddings() -> OpenAIEmbeddings:
-    """OpenAI 임베딩 모델 반환"""
-    return OpenAIEmbeddings(model=EMBED_MODEL)
+    """OpenAI 임베딩 모델 반환 (TPM 제한 대응: chunk_size + 자동 재시도)"""
+    return OpenAIEmbeddings(
+        model       = EMBED_MODEL,
+        chunk_size  = CHUNK_SIZE,   # API 호출당 최대 텍스트 수
+        max_retries = MAX_RETRIES,  # 429 발생 시 지수 백오프 재시도
+    )
 
 
 def chunks_to_documents(chunks: list[Chunk]) -> list[Document]:
