@@ -74,8 +74,8 @@ st.markdown("""
   :root {
     --canvas:  #F3F0EE;
     --ink:     #141413;
-    --orange:  #C87B52;
-    --orange-light: #D8956E;
+    --orange:  #CF4500;
+    --orange-light: #FF6A2B;
     --white:   #FFFFFF;
     --gray:    #7A7570;
     --gray-light: #B5B0AB;
@@ -466,7 +466,7 @@ with st.sidebar:
     if db_ok:
         st.markdown(f"""
         <div class="sys-info">
-          <div style="color:#C87B52;font-weight:700;margin-bottom:0.3rem;">● 연결됨</div>
+          <div style="color:#CF4500;font-weight:700;margin-bottom:0.3rem;">● 연결됨</div>
           <div>청크 <b>{total_chunks:,}개</b></div>
           <div>청킹 <b>{CHUNKING.STRATEGY_NAME}</b></div>
           <div>리트리버 <b>router</b></div>
