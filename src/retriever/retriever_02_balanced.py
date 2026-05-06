@@ -30,16 +30,12 @@ from langchain.retrievers import EnsembleRetriever
 _STOP_TAGS = {"JX", "JC", "JKS", "JKO", "JKG", "JKB", "JKV", "JKQ",
               "EF", "EC", "ETM", "ETN", "XSV", "XSA", "XSN", "SF", "SP", "SS"}
 
-# 금융 리포트에서 너무 범용적으로 사용되어 노이즈가 되는 단어
-# → BM25 검색 시 제외하여 섹터 무관 청크 유입 방지
 FINANCIAL_STOP_WORDS = {
-    # 상태/방향
     "업황", "전망", "분석", "투자", "의견",
     "시장", "성장", "실적", "수익", "이익",
     "예상", "전년", "대비", "기준", "수준",
     "증가", "감소", "상승", "하락", "유지",
     "긍정", "부정", "중립", "판단", "추정",
-    # 보고서 공통 표현
     "리포트", "보고서", "리서치", "센터", "증권",
     "투자자", "주가", "목표", "영업", "매출",
     "분기", "연간", "반기", "전분기", "전년도",
@@ -63,7 +59,7 @@ def korean_tokenizer(text: str) -> list[str]:
             t.form for t in tokens
             if t.tag not in _STOP_TAGS
             and len(t.form) > 1
-            and t.form not in FINANCIAL_STOP_WORDS  # 금융 범용 단어 제외
+            and t.form not in FINANCIAL_STOP_WORDS
         ]
     except Exception:
         return [
@@ -74,8 +70,8 @@ def korean_tokenizer(text: str) -> list[str]:
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
-BM25_WEIGHT   = 0.2   # 벡터 검색 비중 높임 (의미 기반 강화)
-MAX_PER_FIRM  = 3     # 증권사당 최대 반환 청크 수
+BM25_WEIGHT   = 0.2
+MAX_PER_FIRM  = 3
 STRATEGY_NAME = "ensemble_balanced"
 
 
@@ -86,6 +82,7 @@ def build_retriever(
     docs:        list[Document],
     k:           int   = 40,
     bm25_weight: float = BM25_WEIGHT,
+    vector_filter: dict = None,  # ← 추가: 벡터 검색 메타데이터 필터
 ) -> EnsembleRetriever:
     bm25_retriever = BM25Retriever.from_documents(
         docs,
@@ -93,9 +90,13 @@ def build_retriever(
         preprocess_func=korean_tokenizer,
     )
 
+    search_kwargs = {"k": k}
+    if vector_filter:
+        search_kwargs["filter"] = vector_filter  # ← 벡터 검색 필터 적용
+
     vector_retriever = vectorstore.as_retriever(
         search_type   = "similarity",
-        search_kwargs = {"k": k},
+        search_kwargs = search_kwargs,
     )
 
     ensemble = EnsembleRetriever(
@@ -115,18 +116,8 @@ def retrieve(
     k:            int = 40,
     max_per_firm: int = MAX_PER_FIRM,
 ) -> list[Document]:
-    """
-    Hybrid 검색 + 증권사별 균등 샘플링
-
-    1. 후보 검색
-    2. 중복 제거
-    3. 점수 높은 순서 유지하며 증권사당 최대 max_per_firm개씩 선택
-       (관련없는 증권사는 강제 포함 안 함)
-    4. 최종 k개 반환
-    """
     raw = retriever.invoke(query)
 
-    # 중복 제거
     seen       = set()
     candidates = []
     for doc in raw:
@@ -138,8 +129,6 @@ def retrieve(
             seen.add(key)
             candidates.append(doc)
 
-    # 증권사당 max_per_firm개 제한
-    # 점수 높은 순서 유지, 관련없는 증권사는 강제 포함 안 함
     result:      list[Document] = []
     firm_counts: dict[str, int] = defaultdict(int)
 

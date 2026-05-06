@@ -18,7 +18,7 @@ RAGAS 4 Metrics 로 RAG 파이프라인 평가
   - pipeline/ingest.py 실행 완료 (ChromaDB 존재)
 
 ★ 설정 블록 — 이곳만 수정 ★
-  - CHUNKING, EMBEDDING, VECTORSTORE, RETRIEVER, RERANKER: 평가할 조합 선택
+  - CHUNKING, EMBEDDING, VECTORSTORE, RERANKER: 평가할 조합 선택
   - RAG_K, RAG_TOP_N: 검색/리랭크 파라미터
 
 실행:
@@ -42,7 +42,6 @@ load_dotenv()
 from src.processing.chunking import chunking_01_recursive as CHUNKING
 # from src.processing.chunking import chunking_03_hybrid   as CHUNKING
 # from src.processing.chunking import chunking_04_sentence as CHUNKING
-# from src.processing.chunking import chunking_01_raptor   as CHUNKING
 
 # ── 임베딩 전략 ────────────────────────────────────────────────────────────────
 from src.embedding import embedding_01_openai as EMBEDDING
@@ -50,12 +49,12 @@ from src.embedding import embedding_01_openai as EMBEDDING
 # ── 벡터스토어 전략 ────────────────────────────────────────────────────────────
 from src.vectorstore import vectorstore_01_chroma as VECTORSTORE
 
-# ── 리트리버 전략 ──────────────────────────────────────────────────────────────
-from src.retriever import retriever_01_ensemble as RETRIEVER
-
 # ── 리랭커 전략 ────────────────────────────────────────────────────────────────
 from src.reranker import reranker_01_crossencoder as RERANKER
 # from src.reranker import reranker_02_cohere as RERANKER
+
+# ── 라우터 (리트리버 자동 선택) ───────────────────────────────────────────────
+from src.retriever import router as ROUTER
 
 # ── 검색 파라미터 ─────────────────────────────────────────────────────────────
 RAG_K     = 40   # Hybrid Search 후보 수 (Reranker 입력)
@@ -139,11 +138,11 @@ _RAG_PROMPT = ChatPromptTemplate.from_template("""
 
 def _collect_answers_and_contexts(
     questions: list[str],
-    retriever,
+    retrievers,          # ← router의 튜플 (ret1, ret2, all_docs, vectorstore)
 ) -> tuple[list[str], list[list[str]]]:
     """
     각 질문에 대해 RAG 실행 (production 파이프라인과 동일):
-      1. Hybrid Retriever 로 후보 RAG_K개 검색
+      1. Router 가 쿼리 의도 분석 후 리트리버 자동 선택
       2. Reranker 로 RAG_TOP_N개로 압축
       3. LLM 으로 답변 생성
 
@@ -160,8 +159,8 @@ def _collect_answers_and_contexts(
     print(f"  총 {len(questions)}개 질문 처리 중...")
 
     for i, question in enumerate(questions, 1):
-        # 검색 → Rerank
-        candidates    = RETRIEVER.retrieve(retriever, question, k=RAG_K)
+        # router로 쿼리 의도 분석 후 리트리버 자동 선택 + 검색
+        candidates    = ROUTER.retrieve(retrievers, question, k=RAG_K)
         docs          = RERANKER.rerank(question, candidates, top_n=RAG_TOP_N)
         context_texts = [d.page_content for d in docs]
         retrieved.append(context_texts)
@@ -206,14 +205,14 @@ def _build_eval_dataset(
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
 def main():
-    label = f"{CHUNKING.STRATEGY_NAME} + {RETRIEVER.STRATEGY_NAME} + {RERANKER.STRATEGY_NAME}"
+    label = f"{CHUNKING.STRATEGY_NAME} + router + {RERANKER.STRATEGY_NAME}"
 
     print("=" * 65)
     print("RAG 파이프라인 평가 (RAGAS 4 Metrics)")
     print("=" * 65)
     print(f"  청킹     : {CHUNKING.STRATEGY_NAME}")
     print(f"  임베딩   : {EMBEDDING.STRATEGY_NAME}")
-    print(f"  리트리버 : {RETRIEVER.STRATEGY_NAME}")
+    print(f"  리트리버 : router (쿼리 의도에 따라 자동 선택)")
     print(f"  리랭커   : {RERANKER.STRATEGY_NAME}")
     print(f"  k={RAG_K} → rerank → top_n={RAG_TOP_N}")
 
@@ -228,11 +227,11 @@ def main():
     db_path     = _get_db_path()
     vectorstore = _load_vectorstore(db_path)
     all_docs    = _get_all_docs(vectorstore)
-    retriever   = RETRIEVER.build_retriever(vectorstore, all_docs, k=RAG_K)
+    retrievers  = ROUTER.build_retriever(vectorstore, all_docs, k=RAG_K)
 
     # STEP 3: RAG 실행
     print("\n[STEP 3] RAG 실행 (검색 + Rerank + 답변 생성)")
-    answers, retrieved_contexts = _collect_answers_and_contexts(questions, retriever)
+    answers, retrieved_contexts = _collect_answers_and_contexts(questions, retrievers)
 
     # STEP 4: 평가 데이터셋 구성
     print("\n[STEP 4] 평가 데이터셋 구성")
@@ -260,7 +259,7 @@ def main():
 
     # STEP 7: 저장
     result_df = result.to_pandas()
-    result_df["eval_strategy"] = label   # 비교용 전략 라벨 추가
+    result_df["eval_strategy"] = label
     save_results(result_df, RAG_EVAL_PATH, "RAG 평가 결과")
 
     print("\n" + "=" * 65)

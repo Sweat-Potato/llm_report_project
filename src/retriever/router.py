@@ -66,8 +66,7 @@ FIRM_ALIASES = {
     "DS증권": "DS투자증권",
     "ds투자증권": "DS투자증권",
     "ds증권": "DS투자증권",
-    "대신증권": "DS투자증권",
-    "대신": "DS투자증권",
+   
 
     # IBK투자증권
     "IBK투자증권": "IBK투자증권",
@@ -81,6 +80,7 @@ FIRM_ALIASES = {
     "IM증권": "iM증권",
     "im증권": "iM증권",
     "iM": "iM증권",
+    "im": "iM증권",
 
     # SK증권
     "SK증권": "SK증권",
@@ -91,6 +91,9 @@ FIRM_ALIASES = {
     "교보증권": "교보증권",
     "교보": "교보증권",
 
+    # 대신증권
+    "대신증권": "대신증권",
+    "대신": "대신증권",
 
     # 유안타증권
     "유안타증권": "유안타증권",
@@ -318,7 +321,7 @@ def select_and_retrieve(
         intent:     "balanced" | "ensemble" (freeform_chain에서 전달)
         k:          반환할 청크 수
     """
-    ret1_instance, ret2_instance, all_docs = retrievers
+    ret1_instance, ret2_instance, all_docs ,vectorstore= retrievers
 
     if intent == "balanced":
         print(f"  → retriever_02_balanced 사용 (증권사별 균등 샘플링)")

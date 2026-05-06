@@ -110,6 +110,7 @@ def chunk_reports(reports: list[dict]) -> ChunkingResult:
 if __name__ == "__main__":
     from pathlib import Path
     import sys
+    from src.processing.cleaner import clean_reports  # ← 추가
 
     BASE_DIR   = Path(__file__).parent.parent.parent.parent
     CACHE_PATH = BASE_DIR / "data" / "loader_metadata" / "reports_cache.json"
@@ -122,14 +123,14 @@ if __name__ == "__main__":
     reports = load_reports_cache(str(CACHE_PATH))
     print(f"📂 리포트 {len(reports)}개 로드")
 
-    result = chunk_reports(reports)
+    cleaned = clean_reports(reports, verbose=False)   # ← 추가
+    result = chunk_reports(cleaned)                   # ← reports → cleaned
 
     print(f"\n[전략 1: {STRATEGY_NAME}]")
     print(f"  청크 수     : {result.chunk_count}")
     print(f"  평균 크기   : {result.avg_chunk_size:.0f}자")
     sizes = [c.char_count for c in result.chunks]
     print(f"  최소 / 최대 : {min(sizes)}자 / {max(sizes)}자")
-
 
     total = result.chunk_count
 

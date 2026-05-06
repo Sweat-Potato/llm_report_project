@@ -42,7 +42,7 @@ from pathlib import Path
 from langchain.schema import Document, AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
-
+from src.retriever.router import normalize_firms  
 
 
 # 주의: retrieve/rerank 함수는 main.py 가 retrieve_fn / rerank_fn 인자로 주입한다.
@@ -51,6 +51,42 @@ from langchain.prompts import ChatPromptTemplate
 
 from src.retriever.router import select_and_retrieve as _router_select_and_retrieve
 from src.reranker.reranker_01_crossencoder import rerank as _default_rerank
+
+
+VALID_SECTORS = {
+    "건설", "건자재", "광고", "금융", "기계", "휴대폰", "담배", "유통",
+    "미디어", "바이오", "반도체", "보험", "석유화학", "섬유의류", "소프트웨어",
+    "운수창고", "유틸리티", "은행", "인터넷포탈", "자동차", "전기전자", "제약",
+    "조선", "종이", "증권", "철강금속", "타이어", "통신", "항공운송", "홈쇼핑",
+    "음식료", "여행", "게임", "IT", "에너지", "해운", "지주회사", "디스플레이",
+    "화장품", "자동차부품", "교육", "기타",
+}
+
+SECTOR_ALIASES = {
+    "HBM": "반도체",
+    "DRAM": "반도체",
+    "NAND": "반도체",
+    "메모리": "반도체",
+    "완성차": "자동차",
+    "조선업": "조선",
+    "바이오제약": "바이오",
+    "2차전지": "기타",
+    "배터리": "기타",
+    "전기차": "기타",
+    "EV": "기타",
+    "양극재": "기타",
+    "ESS": "기타",
+}
+
+def normalize_sector(sector: str) -> str:
+    if not sector:
+        return None
+    if sector in SECTOR_ALIASES:
+        return SECTOR_ALIASES[sector]
+    if sector in VALID_SECTORS:
+        return sector
+    return "기타"
+
 
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
@@ -342,13 +378,18 @@ def _validate_and_filter_requested_scope(docs: list[Document], intent: dict) -> 
     return docs, None
 
 
+
+
 def _analyze_intent(question: str) -> dict:
     chain = _INTENT_PROMPT | _llm_fast()
     raw   = chain.invoke({"question": question}).content.strip()
     raw   = re.sub(r'^```json\s*', '', raw)
     raw   = re.sub(r'\s*```$',     '', raw)
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
+        # ← 추가: LLM이 추출한 증권사명 정규화
+        result["target_brokers"] = normalize_firms(result.get("target_brokers", []))
+        return result
     except Exception:
         return {
             "question_type":  "other",
@@ -371,17 +412,181 @@ def _collect_chunks(
     k_per_query:    int = 15,
     top_n:          int = 12,
     intent:         str = "ensemble",
+    target_period:  str = None,
+    target_sector:  str = None,
 ) -> list[Document]:
     _rerank = rerank_fn if rerank_fn else _default_rerank
+    _, _, all_docs, vectorstore = retrievers
+
+    # ── 사전 필터링 (섹터 필수 + 기간/증권사 옵션) ──────────────────────────
+    if target_sector:
+        pre_filtered = all_docs
+
+        # 1. 섹터 필터링 (필수)
+        sector_mapped = normalize_sector(target_sector)
+        if sector_mapped:
+            pre_filtered = [d for d in pre_filtered if d.metadata.get("sector", "") == sector_mapped]
+            print(f"  → 사전 섹터 필터링: '{target_sector}' → '{sector_mapped}' ({len(pre_filtered)}개)")
+
+        # 2. 기간 필터링 (옵션)
+        if target_period:
+            pre_filtered = [d for d in pre_filtered if d.metadata.get("report_date", "").startswith(target_period)]
+            print(f"  → 사전 기간 필터링: {target_period} ({len(pre_filtered)}개)")
+
+        # 3. 증권사 필터링 (옵션)
+        if target_brokers:
+            normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
+            pre_filtered = [
+                d for d in pre_filtered
+                if any(nb in (_get_firm(d) or "").replace(" ", "") for nb in normalized)
+            ]
+            print(f"  → 사전 증권사 필터링: {target_brokers} ({len(pre_filtered)}개)")
+
+        if not pre_filtered:
+            print(f"  ⚠️ 필터링 결과 없음 → 전체 청크로 검색")
+        else:
+            # 필터링된 청크로 BM25+벡터 앙상블 재구성
+            try:
+                from src.retriever import retriever_01_ensemble as ret1
+                from src.retriever import retriever_02_balanced as ret2
+            except ImportError:
+                from src.retriever import retriever_01_ensemble as ret1
+                from src.retriever import retriever_02_balanced as ret2
+
+            conditions = []
+            if target_sector:
+                sector_mapped = normalize_sector(target_sector)
+                if sector_mapped:
+                    conditions.append({"sector": {"$eq": sector_mapped}})
+            # target_period는 pre_filtered에서 이미 처리 → 벡터 필터 불필요
+            if target_brokers:
+                conditions.append({"source_firm": {"$in": target_brokers}})
+
+            if len(conditions) == 1:
+                filter_arg = conditions[0]
+            elif len(conditions) > 1:
+                filter_arg = {"$and": conditions}
+            else:
+                filter_arg = None
+
+            ret1_new = ret1.build_retriever(vectorstore, pre_filtered, k=k_per_query, vector_filter=filter_arg)
+            ret2_new = ret2.build_retriever(vectorstore, pre_filtered, k=k_per_query, vector_filter=filter_arg)
+
+            all_candidates = []
+            seen = set()
+            for q in queries:
+                if intent == "balanced":
+                    docs_q = ret2.retrieve(ret2_new, q, k=k_per_query)
+                else:
+                    docs_q = ret1.retrieve(ret1_new, q, k=k_per_query)
+                for doc in docs_q:
+                    filename = doc.metadata.get("filename", "")
+                    chunk_id = doc.metadata.get("chunk_index") or doc.metadata.get("chunk_id") or doc.page_content[:120]
+                    key = (filename, chunk_id)
+                    if key not in seen:
+                        seen.add(key)
+                        all_candidates.append(doc)
+
+            # 증권사별 per_firm rerank (balanced + 증권사 지정)
+            if target_brokers and intent == "balanced":
+                per_firm = max(1, top_n // len(target_brokers))
+                results = []
+                for i, firm in enumerate(target_brokers):
+                    nb = firm.replace("증권", "").replace(" ", "")
+                    firm_docs = [
+                        d for d in all_candidates
+                        if nb in (_get_firm(d) or "").replace(" ", "")
+                    ]
+                    if firm_docs:
+                        firm_query = queries[i] if i < len(queries) else queries[0]
+                        reranked = _rerank(firm_query, firm_docs, top_n=per_firm)
+                        results.extend(reranked)
+                        print(f"  ✅ '{firm}': {len(reranked)}개 확보")
+                    else:
+                        print(f"  ❌ '{firm}' 청크 없음")
+                return results
+
+            combined_query = " ".join(queries)
+            return _rerank(combined_query, all_candidates, top_n=top_n)
+
+   # ── 섹터 없을 때: 기간/증권사 사전 필터링 후 검색 ──────────────────────
+    if target_period or target_brokers:
+        pre_filtered = all_docs
+
+        if target_period:
+            pre_filtered = [d for d in pre_filtered if d.metadata.get("report_date", "").startswith(target_period)]
+            print(f"  → 사전 기간 필터링: {target_period} ({len(pre_filtered)}개)")
+
+        if target_brokers:
+            normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
+            pre_filtered = [
+                d for d in pre_filtered
+                if any(nb in (_get_firm(d) or "").replace(" ", "") for nb in normalized)
+            ]
+            print(f"  → 사전 증권사 필터링: {target_brokers} ({len(pre_filtered)}개)")
+
+        if not pre_filtered:
+            print(f"  ⚠️ 필터링 결과 없음 → 전체 청크로 검색")
+            pre_filtered = all_docs
+
+        try:
+            from src.retriever import retriever_01_ensemble as ret1
+            from src.retriever import retriever_02_balanced as ret2
+        except ImportError:
+            from src.retriever import retriever_01_ensemble as ret1
+            from src.retriever import retriever_02_balanced as ret2
+
+        conditions = []
+        if target_period:
+            pass  # pre_filtered에서 처리됨
+        if target_brokers:
+            conditions.append({"source_firm": {"$in": target_brokers}})
+
+        filter_arg = conditions[0] if len(conditions) == 1 else {"$and": conditions} if conditions else None
+
+        ret1_new = ret1.build_retriever(vectorstore, pre_filtered, k=k_per_query, vector_filter=filter_arg)
+        ret2_new = ret2.build_retriever(vectorstore, pre_filtered, k=k_per_query, vector_filter=filter_arg)
+
+        all_candidates = []
+        seen = set()
+        for q in queries:
+            if intent == "balanced":
+                docs_q = ret2.retrieve(ret2_new, q, k=k_per_query)
+            else:
+                docs_q = ret1.retrieve(ret1_new, q, k=k_per_query)
+            for doc in docs_q:
+                filename = doc.metadata.get("filename", "")
+                chunk_id = doc.metadata.get("chunk_index") or doc.metadata.get("chunk_id") or doc.page_content[:120]
+                key = (filename, chunk_id)
+                if key not in seen:
+                    seen.add(key)
+                    all_candidates.append(doc)
+
+        if target_brokers and intent == "balanced":
+            per_firm = max(1, top_n // len(target_brokers))
+            results = []
+            for i, firm in enumerate(target_brokers):
+                nb = firm.replace("증권", "").replace(" ", "")
+                firm_docs = [d for d in all_candidates if nb in (_get_firm(d) or "").replace(" ", "")]
+                if firm_docs:
+                    firm_query = queries[i] if i < len(queries) else queries[0]
+                    reranked = _rerank(firm_query, firm_docs, top_n=per_firm)
+                    results.extend(reranked)
+                    print(f"  ✅ '{firm}': {len(reranked)}개 확보")
+                else:
+                    print(f"  ❌ '{firm}' 청크 없음")
+            return results
+
+        combined_query = " ".join(queries)
+        return _rerank(combined_query, all_candidates, top_n=top_n)
+
+    # ── 섹터/기간/증권사 모두 없을 때: 전체 검색 ────────────────────────────
     all_candidates: list[Document] = []
     seen: set[tuple] = set()
 
     for q in queries:
-        # ✅ lambda 기본 인자로 q를 고정 — 클로저가 루프 종료 후 마지막 q를 참조하는 버그 방지
         _retrieve = retrieve_fn if retrieve_fn else lambda r, _q, k, _i=intent: _router_select_and_retrieve(r, _q, intent=_i, k=k)
         for doc in _retrieve(retrievers, q, k=k_per_query):
-            # dedup 키: filename + chunk_index/chunk_id 우선, 없으면 page_content 앞부분으로 fallback.
-            # 메타키가 누락되어 모든 청크가 같은 키로 잘리는 사고를 방지.
             filename = doc.metadata.get("filename", "")
             chunk_id = (
                 doc.metadata.get("chunk_index")
@@ -393,21 +598,8 @@ def _collect_chunks(
                 seen.add(key)
                 all_candidates.append(doc)
 
-    if target_brokers:
-        normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
-        pinned = [
-            d for d in all_candidates
-            if any(nb in _get_firm(d).replace(" ", "")
-                   for nb in normalized)
-        ]
-        rest = [d for d in all_candidates if d not in pinned]
-        all_candidates = pinned + rest
-
-    # ✅ rerank 쿼리: 단일 첫 번째 쿼리 대신 모든 쿼리를 결합해 의미 커버리지를 확보
     combined_query = " ".join(queries)
     return _rerank(combined_query, all_candidates, top_n=top_n)
-
-
 # ── Step 3: 증권사별 컨텍스트 구성 (few-shot 경로용) ─────────────────────────
 
 def _build_context(docs: list[Document], target_brokers: list[str]) -> str:
@@ -1853,6 +2045,8 @@ def answer_question(
     print("\n[Step 1] 질문 유형 분류 및 검색 쿼리 생성 중...")
     intent = _analyze_intent(question)
     print(f"  → 유형: {intent['question_type']}")
+    print(f"  → 섹터: {intent.get('target_sector') or '전체'}")
+    print(f"  → 기간: {intent.get('target_period') or '전체'}")
     print(f"  → 대상 증권사: {intent['target_brokers'] or '전체'}")
     print(f"  → 검색 쿼리: {intent['search_queries']}")
 
@@ -1862,11 +2056,18 @@ def answer_question(
 
     # ── Step 2: 다중 쿼리 검색 + 중복 제거 + Rerank ─────────────────────
     print("\n[Step 2] 리포트 청크 수집 및 rerank 중...")
-    _intent = "balanced" if intent["question_type"] == "broker_comparison" else "ensemble"
+
+    _intent = "balanced" if (
+    intent["question_type"] in ("broker_comparison", "consensus", "other")
+    or (intent["question_type"] == "coverage_summary" and len(intent["target_brokers"]) >= 2)
+    ) else "ensemble"
+
     docs = _collect_chunks(
         retrievers,
         queries        = intent["search_queries"],
         target_brokers = intent["target_brokers"],
+        target_period  = intent.get("target_period"),   
+        target_sector  = intent.get("target_sector"),   
         retrieve_fn    = retrieve_fn,
         rerank_fn      = rerank_fn,
         k_per_query    = k_full if is_other else k_per_query,
@@ -1972,4 +2173,5 @@ def answer_question(
         "sources":       sources,
         "chunk_count":   len(docs),
         "mode":          mode,
+        "docs":          docs,
     }
