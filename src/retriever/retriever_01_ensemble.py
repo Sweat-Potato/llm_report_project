@@ -20,20 +20,15 @@ from langchain.retrievers import EnsembleRetriever
 
 # ── 한국어 토크나이저 ──────────────────────────────────────────────────────────
 
-# 조사(JX,JC,JK*), 어미(EF,EC,ETM), 접미사(XS*) 제거 → 의미 있는 형태소만 남김
 _STOP_TAGS = {"JX", "JC", "JKS", "JKO", "JKG", "JKB", "JKV", "JKQ",
               "EF", "EC", "ETM", "ETN", "XSV", "XSA", "XSN", "SF", "SP", "SS"}
 
-# 금융 리포트에서 너무 범용적으로 사용되어 노이즈가 되는 단어
-# → BM25 검색 시 제외하여 섹터 무관 청크 유입 방지
 FINANCIAL_STOP_WORDS = {
-    # 상태/방향
     "업황", "전망", "분석", "투자", "의견",
     "시장", "성장", "실적", "수익", "이익",
     "예상", "전년", "대비", "기준", "수준",
     "증가", "감소", "상승", "하락", "유지",
     "긍정", "부정", "중립", "판단", "추정",
-    # 보고서 공통 표현
     "리포트", "보고서", "리서치", "센터", "증권",
     "투자자", "주가", "목표", "영업", "매출",
     "분기", "연간", "반기", "전분기", "전년도",
@@ -58,7 +53,7 @@ def korean_tokenizer(text: str) -> list[str]:
             t.form for t in tokens
             if t.tag not in _STOP_TAGS
             and len(t.form) > 1
-            and t.form not in FINANCIAL_STOP_WORDS  # 금융 범용 단어 제외
+            and t.form not in FINANCIAL_STOP_WORDS
         ]
     except Exception:
         return [
@@ -69,23 +64,24 @@ def korean_tokenizer(text: str) -> list[str]:
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 
-# 금융 전문용어·고유명사 매칭을 위해 BM25 비중을 높임
 BM25_WEIGHT = 0.2
 
 
 # ── Retriever 빌더 ────────────────────────────────────────────────────────────
 
 def build_retriever(
-    vectorstore: Chroma,
-    docs:        list[Document],
-    k:           int   = 20,
-    bm25_weight: float = BM25_WEIGHT,
+    vectorstore:   Chroma,
+    docs:          list[Document],
+    k:             int   = 20,
+    bm25_weight:   float = BM25_WEIGHT,
+    vector_filter: dict  = None,  # ← 추가: 벡터 검색 메타데이터 필터
 ) -> EnsembleRetriever:
     """
     Hybrid Retriever 생성
-    vectorstore: 이미 생성된 ChromaDB 인스턴스
-    docs:        BM25용 Document 리스트 (청크 전체)
-    k:           각 retriever가 가져올 문서 수
+    vectorstore:   이미 생성된 ChromaDB 인스턴스
+    docs:          BM25용 Document 리스트 (청크 전체)
+    k:             각 retriever가 가져올 문서 수
+    vector_filter: 벡터 검색 메타데이터 필터 (섹터/기간/증권사 사전 필터링 시 사용)
     """
     bm25_retriever = BM25Retriever.from_documents(
         docs,
@@ -93,9 +89,13 @@ def build_retriever(
         preprocess_func=korean_tokenizer,
     )
 
+    search_kwargs = {"k": k}
+    if vector_filter:
+        search_kwargs["filter"] = vector_filter  # ← 벡터 검색 필터 적용
+
     vector_retriever = vectorstore.as_retriever(
         search_type   = "similarity",
-        search_kwargs = {"k": k},
+        search_kwargs = search_kwargs,
     )
 
     ensemble = EnsembleRetriever(

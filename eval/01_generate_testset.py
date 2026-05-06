@@ -97,6 +97,29 @@ def main():
     # STEP 1: 청크 준비
     print("\n[STEP 1] 청크 로드")
     text_chunks = _load_text_chunks()
+    
+    # 1. 빈 chunk 방어
+    if not text_chunks:
+        print("  ERROR: 생성된 청크가 없습니다.")
+        sys.exit(1)
+
+    # 2. 짧은 chunk 제거
+    text_chunks = [c for c in text_chunks if len(c.strip()) > 200]
+
+    # 3. 중복 제거
+    text_chunks = list(set(text_chunks))
+
+    # 4. 샘플링
+    import random
+
+    MAX_CHUNKS_FOR_TESTSET = 300
+
+    if len(text_chunks) > MAX_CHUNKS_FOR_TESTSET:
+        print(f"\n  ⚠️ 청크 샘플링 적용 ({len(text_chunks)} → {MAX_CHUNKS_FOR_TESTSET})")
+        random.seed(42)
+        text_chunks = random.sample(text_chunks, MAX_CHUNKS_FOR_TESTSET)
+
+    print(f"  최종 사용 청크: {len(text_chunks)}개")
 
     # STEP 2: Generator 초기화
     print("\n[STEP 2] TestsetGenerator 초기화")
