@@ -201,6 +201,8 @@ def chunk_reports(reports: list[dict]) -> ChunkingResult:
 
 # ── 단독 실행 ─────────────────────────────────────
 if __name__ == "__main__":
+    from src.processing.cleaner import clean_reports  # ← 추가
+
     from pathlib import Path
     import sys
 
@@ -215,7 +217,8 @@ if __name__ == "__main__":
     reports = load_reports_cache(str(CACHE_PATH))
     print(f"📂 리포트 {len(reports)}개 로드")
 
-    result = chunk_reports(reports)
+    cleaned = clean_reports(reports, verbose=False)   # ← 추가
+    result = chunk_reports(cleaned)
 
     print(f"\n[전략 3: {STRATEGY_NAME}]")
     print(f"  청크 수     : {result.chunk_count}")

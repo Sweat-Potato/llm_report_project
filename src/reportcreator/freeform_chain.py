@@ -431,7 +431,6 @@ def _collect_chunks(
                 seen.add(key)
                 all_candidates.append(doc)
 
-<<<<<<< HEAD
     if target_brokers and intent == "balanced":
         per_firm = max(1, top_n // len(target_brokers))
         results = []
@@ -448,16 +447,6 @@ def _collect_chunks(
             else:
                 print(f"  ❌ '{firm}' 청크 없음")
         return results
-=======
-    if target_brokers:
-        normalized = [b.replace("증권", "").replace(" ", "") for b in target_brokers]
-        pinned = [
-            d for d in all_candidates
-            if any(nb in _get_firm(d).replace(" ", "")
-                   for nb in normalized)
-        ]
-        all_candidates = pinned 
->>>>>>> main
 
     
     if target_brokers:
@@ -1920,3 +1909,4 @@ def answer_question(
         "chunk_count":   len(docs),
         "mode":          mode,
         "docs":          docs,
+    }

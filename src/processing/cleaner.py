@@ -12,6 +12,7 @@ cleaner.py
   6. 페이지 번호 제거
   7. 마크다운 문법 기호 제거 (#, **, *, ---)
   8. 공백 / 줄바꿈 정리
+  9. 너무 짧은 줄 제거 (차트 레이블, 날짜 조각 등 노이즈)
 
 사용법:
     # 페이지 단위 Document 리스트 정제 (Loader와 연동 시)
@@ -92,41 +93,29 @@ def _is_header_footer(line: str) -> bool:
 # 2. 목차
 # ══════════════════════════════════════════════════════
 
-# 명시적 목차 헤더 (일반 + 마크다운 형식)
-# 예: "목차", "Contents", "# **Contents**"
 _TOC_START_RE = re.compile(
     r"^(목\s*차|Contents?|Table\s+of\s+Contents?|INDEX|차\s*례)\s*$"
     r"|^#+\s*\*{0,2}(목\s*차|Contents?|Table\s+of\s+Contents?|INDEX)\*{0,2}\s*$",
     re.IGNORECASE,
 )
 
-# 목차 항목: 텍스트 + 공백 2개 이상 + 페이지번호 로 끝나는 줄
-# 예: "AI 패권전쟁과 중국의...   06"
 _TOC_ITEM_WITH_PAGE_RE = re.compile(
     r"^.{2,60}\s{2,}\d{1,3}\s*$"
 )
 
-# 목차 항목: 점선/대시로 연결
-# 예: "제목.......10"
 _TOC_ITEM_DOTTED_RE = re.compile(
     r"^.{2,40}(\.{3,}|─{3,}|\-{3,})\s*\d{1,3}\s*$"
 )
 
-# 목차 항목: 마크다운 bold + · · · 페이지번호
-# 예: "**· · · 3pg**", "**· · · 10pg**", "· · · 21pg"
 _TOC_ITEM_MD_RE = re.compile(
     r"^\*{0,2}[·•\s]*\d{1,3}(pg|p|페이지)?\*{0,2}\s*$",
     re.IGNORECASE,
 )
 
-# 목차 항목: 로마숫자 + 제목 + 페이지번호
-# 예: "Ⅰ. Summary 3", "Ⅱ. 수요전망 6", "Ⅲ. Memory ..."
 _TOC_ITEM_ROMAN_RE = re.compile(
     r"^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴ]+[\.]?\s*.{1,40}(\s+\d{1,3})?\s*$"
 )
 
-# 목차 섹션 레이블
-# 예: "[산업분석]", "[반도체]"
 _TOC_SECTION_RE = re.compile(
     r"^\[.{2,10}\]\s*$"
 )
@@ -150,11 +139,6 @@ def _is_toc_item(line: str) -> bool:
 
 
 def _remove_toc(text: str) -> str:
-    """
-    목차 블록 제거
-    1. 명시적 헤더(목차/Contents/# **Contents**) 이후 항목 제거
-    2. 페이지 번호로 끝나는 줄이 3개 이상 연속이면 묵시적 목차로 판단
-    """
     lines  = text.split("\n")
     result = []
     in_toc = False
@@ -164,7 +148,6 @@ def _remove_toc(text: str) -> str:
         line = lines[i]
         s    = line.strip()
 
-        # 명시적 목차 헤더
         if _TOC_START_RE.match(s):
             in_toc = True
             i += 1
@@ -177,7 +160,6 @@ def _remove_toc(text: str) -> str:
             else:
                 in_toc = False
 
-        # 묵시적 목차 감지: 페이지 번호로 끝나는 줄이 3개 이상 연속
         if _TOC_ITEM_WITH_PAGE_RE.match(s):
             j = i + 1
             while j < len(lines) and (
@@ -198,19 +180,16 @@ def _remove_toc(text: str) -> str:
 # 3. 그림/표 캡션 + 자료 출처
 # ══════════════════════════════════════════════════════
 
-# 그림/표 캡션
 _CAPTION_RE = re.compile(
     r"^(그림|표|Figure|Fig\.?|Table|Chart|도표)\s*\d+[\.\-\s].*$",
     re.IGNORECASE,
 )
 
-# 자료 출처
 _SOURCE_RE = re.compile(
     r"^(자료|출처|Source|주|Note|주석)\s*[:：].*$",
     re.IGNORECASE,
 )
 
-# 표 컬럼 헤더 레이블
 _TABLE_HEADER_RE = re.compile(
     r"^(업체명|종목명|회사명|종목코드|티커|Ticker|구분|항목|내용|비고|단위"
     r"|시가총액|종가|매출액|영업이익|순이익|PER|PBR|EPS|ROE|배당수익률"
@@ -218,7 +197,6 @@ _TABLE_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# [도표N] 형식 캡션
 _BRACKET_CAPTION_RE = re.compile(
     r"^[\[\(]\s*(그림|표|도표|Figure|Fig\.?|Table|Chart)\s*\d+[\]\)\s].*$",
     re.IGNORECASE,
@@ -235,7 +213,6 @@ def _remove_captions_and_sources(text: str) -> str:
             result.append(line)
             continue
         s_plain = _strip_md_inline(s)
-        # 마크다운 볼드/헤딩으로 감싼 경우도 체크 (예: **그림 1. ...**, **자료:** ...)
         if _CAPTION_RE.match(s) or _CAPTION_RE.match(s_plain):
             continue
         if _BRACKET_CAPTION_RE.match(s) or _BRACKET_CAPTION_RE.match(s_plain):
@@ -244,10 +221,8 @@ def _remove_captions_and_sources(text: str) -> str:
             continue
         if _TABLE_HEADER_RE.match(s) or _TABLE_HEADER_RE.match(s_plain):
             continue
-        # 단위 표시 줄: "(단위: 십억원)" 등
         if re.match(r"^\(단위\s*[:：][^)]{1,20}\)\s*$", s) or re.match(r"^\(단위\s*[:：][^)]{1,20}\)\s*$", s_plain):
             continue
-        # 단독 연도/분기 코드: "2026E", "1Q25", "2027F" 등
         if re.fullmatch(r"\d{4}[EF]?|\d[QH]\d{2}", s):
             continue
         result.append(line)
@@ -270,40 +245,67 @@ _NUM_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 재무제표 항목명 패턴
+_FINANCIAL_STMT_RE = re.compile(
+    r"^(매출채권|재고자산|부채총계|자본총계|영업이익|당기순이익|매입채무"
+    r"|유형자산|무형자산|이익잉여금|자본금|자본잉여금|비지배주주지분"
+    r"|현금및현금성자산|단기금융자산|장기금융자산|관계기업|투자부동산"
+    r"|차입금|사채|충당부채|기타유동|기타비유동|법인세|영업활동|투자활동"
+    r"|재무활동|CAPEX|FCF|배당금|EPS|BPS|DPS|PER|PBR|EV|EBITDA|ROE|ROA|ROIC)",
+    re.IGNORECASE,
+)
+
 def _is_table_chart_line(line: str) -> bool:
     s = line.strip()
     if not s:
         return False
+
     # 숫자·기호만
     if re.fullmatch(r"[\d\s,.\-\+%\(\)\/×÷±≈~→←↑↓]+", s):
         return True
+
     # 파이프 표
     if s.count("|") >= 2:
         return True
+
     # 구분선
     if re.fullmatch(r"[\-─=\+\|\s]{3,}", s):
         return True
+
     # 탭 구분 숫자 나열
     if "\t" in s and len(re.findall(r"\d", s)) > len(s) * 0.3:
         return True
+
     # 숫자/금융약어 60% 이상
     tokens = s.split()
     if 2 <= len(tokens) <= 12:
         num_count = sum(1 for t in tokens if _NUM_TOKEN_RE.match(t))
         if num_count >= len(tokens) * 0.6:
             return True
+
     # 단위 레이블
     if len(s) <= 40 and re.fullmatch(r"[\(\)a-zA-Z가-힣%,\s·/]+", s):
         if re.search(r"\(.{1,15}\)", s):
             return True
+
+    # 날짜 범위 패턴 ('22. 3~ '23. 5 등 차트 축 레이블)
+    if re.fullmatch(r"[\d'\~\.\s/QHFE,:\-]+", s) and len(s) < 50:
+        return True
+
+    # 연도/월 축 레이블 ('23/1 '24/1 '25/1 등)
+    if re.fullmatch(r"(\'?\d{2}[/\.\s]\d{0,2}\s*)+", s):
+        return True
+
+    # 재무제표 행: 항목명 + 숫자 3개 이상
+    if _FINANCIAL_STMT_RE.match(s):
+        nums = re.findall(r"-?\d[\d,\.]*", s)
+        if len(nums) >= 2:
+            return True
+
     return False
 
 
 def _is_entity_name_block(segment: list[str]) -> bool:
-    """
-    연속 줄이 고유명사(업체명, 브랜드명) 나열인지 판단
-    예: Synopsys / Cadence / Siemens / Empyrean
-    """
     if len(segment) < 2:
         return False
     entity_count = 0
@@ -317,6 +319,94 @@ def _is_entity_name_block(segment: list[str]) -> bool:
         ):
             entity_count += 1
     return entity_count >= len(segment) * 0.8
+
+
+# 재무제표 블록 감지 패턴
+_FINANCIAL_BLOCK_START_RE = re.compile(
+    r"^(재무상태표|손익계산서|현금흐름표|포괄손익계산서|Financial\s*(Data|Statement)|"
+    r"주요\s*재무\s*지표|재무\s*요약|Financial\s*Summary|Income\s*Statement|"
+    r"Balance\s*Sheet|Cash\s*Flow)",
+    re.IGNORECASE,
+)
+
+
+def _remove_financial_statements(text: str) -> str:
+    """
+    재무제표 블록 통째 제거
+    - 재무상태표/손익계산서/현금흐름표 헤더 감지 후 블록 제거
+    - 숫자가 밀집된 줄이 5줄 이상 연속이면 재무제표로 판단
+    """
+    lines  = text.split("\n")
+    result = []
+    i      = 0
+
+    while i < len(lines):
+        line = lines[i]
+        s    = line.strip()
+
+        # 재무제표 헤더 감지
+        if _FINANCIAL_BLOCK_START_RE.match(s):
+            # 헤더 이후 숫자가 많은 줄들을 스킵
+            j = i + 1
+            while j < len(lines):
+                next_s = lines[j].strip()
+                if not next_s:
+                    j += 1
+                    continue
+                # 숫자 비중 50% 이상이면 재무제표 내부
+                num_ratio = len(re.findall(r"\d", next_s)) / max(len(next_s), 1)
+                if num_ratio >= 0.3 or _is_table_chart_line(lines[j]):
+                    j += 1
+                else:
+                    # 3줄 이상 제거됐으면 재무제표 블록으로 확정
+                    if j - i >= 3:
+                        break
+                    else:
+                        # 짧으면 헤더만 제거하고 나머지 유지
+                        j = i + 1
+                        break
+            i = j
+            continue
+
+        # 숫자 밀집 줄이 5줄 이상 연속이면 재무제표로 판단
+        if _is_table_chart_line(line):
+            j = i + 1
+            while j < len(lines) and (not lines[j].strip() or _is_table_chart_line(lines[j])):
+                j += 1
+
+            if j - i >= 5:
+                i = j
+                continue
+            elif j - i >= 2:
+                i = j
+                continue
+            else:
+                prev_ok = bool(result and result[-1].strip() and not _is_table_chart_line(result[-1]))
+                next_ok = j < len(lines) and lines[j].strip() and not _is_table_chart_line(lines[j])
+                if prev_ok or next_ok:
+                    i += 1
+                    continue
+
+        # 고유명사 나열 블록 감지
+        else:
+            j = i + 1
+            while j < len(lines) and lines[j].strip() and not _is_table_chart_line(lines[j]):
+                ns = lines[j].strip()
+                tokens = ns.split()
+                if len(tokens) <= 4 and len(ns) <= 50 and not re.search(r"[가-힣]{5,}", ns):
+                    j += 1
+                else:
+                    break
+
+            segment = [lines[k].strip() for k in range(i, j) if lines[k].strip()]
+            if len(segment) >= 3 and _is_entity_name_block(segment):
+                i = j
+                continue
+
+        result.append(line)
+        i += 1
+
+    return "\n".join(result)
 
 
 def _remove_tables_charts(text: str) -> str:
@@ -339,24 +429,20 @@ def _remove_tables_charts(text: str) -> str:
             continue
 
         if _is_table_chart_line(line):
-            # 연속 범위 파악
             j = i + 1
             while j < len(lines) and (not lines[j].strip() or _is_table_chart_line(lines[j])):
                 j += 1
 
             if j - i >= 2:
-                # 연속 블록 → 통째 제거
                 i = j
                 continue
             else:
-                # 단독 줄 → 앞뒤 문맥 확인
                 prev_ok = bool(result and result[-1].strip() and not _is_table_chart_line(result[-1]))
                 next_ok = j < len(lines) and lines[j].strip() and not _is_table_chart_line(lines[j])
                 if prev_ok or next_ok:
                     i += 1
                     continue
 
-        # 고유명사 나열 블록 감지 (업체명 목록)
         else:
             j = i + 1
             while j < len(lines) and lines[j].strip() and not _is_table_chart_line(lines[j]):
@@ -393,12 +479,53 @@ _DISCLAIMER_PATTERNS = [
     r"Analyst\s+Certification.*?(\n\n|\Z)",
     r"IMPORTANT\s+DISCLOSURES.*?(\n\n|\Z)",
     r"본 자료에\s*기재된\s*내용들은.*?(\n\n|\Z)",
+    r"제공시점\s*현재\s*기관투자가.*?(\n\n|\Z)",
+    r"동\s*자료의\s*추천종목.*?(\n\n|\Z)",
+    r"[\uf0a0].*?(\n\n|\Z)",
+    r"당사는\s*자료\s*작성일.*?(\n\n|\Z)",
+    r"동\s*자료는\s*당사의\s*제작물.*?(\n\n|\Z)",
+    r"당사는\s*본\s*자료\s*발간일.*?(\n\n|\Z)",
+    r"제공시점\s*현재\s*기관투자가.+",
 ]
 
 def _remove_disclaimers(text: str) -> str:
     for p in _DISCLAIMER_PATTERNS:
         text = re.sub(p, "\n", text, flags=re.DOTALL | re.IGNORECASE)
-    return text
+
+    # 면책조항 키워드 이후 전체 제거
+    DISCLAIMER_TRIGGERS = [
+        "Compliance",
+        "제공시점 현재 기관투자가",
+        "동 자료의 추천종목",
+        "당사는 자료 작성일",
+        "당사는 본 자료 발간일",
+        "\uf0a0",
+        "본 자료는 고객의 증권투자",
+        "본 조사분석자료는",
+        "투자의견 및 적용기준",
+        "투자의견 비율 기준일",
+        "매수 + 10%",
+        "투자의견 및 목표주가 변동추이",
+    ]
+
+    lines = text.split("\n")
+    result = []
+    skip = False
+    for line in lines:
+        if "Compliance" in line:
+            print(f"[DEBUG] Compliance 발견: {repr(line[:80])}")
+            break
+        if not skip and (
+            any(trigger in line for trigger in DISCLAIMER_TRIGGERS)
+            or ("당사는" in line and ("보유하고 있지 않습니다" in line or "사전 제공한 사실이 없습니다" in line))
+            or ("동 자료" in line and ("분석사는" in line or "게시된 내용들은" in line or "금융투자분석사는" in line))
+            or ("본인의 의견을 정확하게 반영" in line)
+            or ("외부의 부당한 압력이나 간섭없이" in line)
+        ):
+            skip = True
+        if not skip:
+            result.append(line)
+    return "\n".join(result)
 
 
 # ══════════════════════════════════════════════════════
@@ -410,7 +537,6 @@ def _remove_page_numbers(text: str) -> str:
     text = re.sub(r"^\s*\d+\s*/\s*\d+\s*$",              "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*\d{1,3}\s*$",                    "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*Page\s*\d+\s*(of\s*\d+)?\s*$",   "", text, flags=re.MULTILINE | re.IGNORECASE)
-    # pymupdf4llm 마크다운 페이지번호: "###### 04", "####### 12" 등
     text = re.sub(r"^#{4,6}\s*\d{1,3}\s*$",              "", text, flags=re.MULTILINE)
     return text
 
@@ -420,16 +546,11 @@ def _remove_page_numbers(text: str) -> str:
 # ══════════════════════════════════════════════════════
 
 def _strip_markdown_syntax(text: str) -> str:
-    """콘텐츠 정제가 끝난 후 남은 마크다운 문법 기호를 plain text로 변환."""
-    # 헤딩 마커 (# ## ### 등 → 내용만)
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
-    # 볼드/이탤릭 (***x***, **x**, *x*)
     text = re.sub(r"\*{3}([^*\n]*)\*{3}", r"\1", text)
     text = re.sub(r"\*{2}([^*\n]*)\*{2}", r"\1", text)
     text = re.sub(r"\*([^*\n]+)\*",       r"\1", text)
-    # 수평선 (---, ***, ___ 단독 줄)
     text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
-    # 인라인 코드 (`code`)
     text = re.sub(r"`([^`\n]+)`", r"\1", text)
     return text
 
@@ -441,7 +562,6 @@ def _strip_markdown_syntax(text: str) -> str:
 def clean_page(text: str) -> str:
     """
     단일 텍스트 정제 (raw 텍스트 입력 → 정제 텍스트 반환)
-    페이지 단위 또는 full_text 전체 모두 적용 가능
     """
     # 0. HTML 태그 제거
     text = _remove_html_tags(text)
@@ -457,7 +577,10 @@ def clean_page(text: str) -> str:
     # 3. 그림/표 캡션 + 자료 출처
     text = _remove_captions_and_sources(text)
 
-    # 4. 표/차트/그래프 데이터
+    # 4-1. 재무제표 블록 제거 (표/차트 제거보다 먼저)
+    text = _remove_financial_statements(text)
+
+    # 4-2. 표/차트/그래프 데이터
     text = _remove_tables_charts(text)
 
     # 5. 법적 고지
@@ -466,12 +589,17 @@ def clean_page(text: str) -> str:
     # 6. 페이지 번호
     text = _remove_page_numbers(text)
 
-    # 7. 마크다운 문법 기호 제거 (pymupdf4llm 출력 후처리)
+    # 7. 마크다운 문법 기호 제거
     text = _strip_markdown_syntax(text)
 
     # 8. 공백/줄바꿈 정리
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
+
+    # 9. 너무 짧은 줄 제거 (차트 레이블, 날짜 조각 등 노이즈)
+    lines = text.split("\n")
+    lines = [l for l in lines if len(l.strip()) == 0 or len(l.strip()) >= 15]
+    text = "\n".join(lines)
 
     return text.strip()
 
@@ -506,11 +634,6 @@ def clean_reports(
     """
     reports_cache.json 로드 결과를 일괄 정제.
     각 report의 full_text → clean_page() → clean_text 필드 추가.
-
-    chunking 전 단계에서 호출:
-        reports = load_cache(...)
-        reports = clean_reports(reports)
-        result  = chunk_reports(reports)  # clean_text 우선 사용
     """
     if verbose:
         print(f"🧹 클리닝 시작 ({len(reports)}개 리포트)\n")
@@ -575,7 +698,6 @@ if __name__ == "__main__":
 
     cleaned = clean_reports(reports, verbose=True)
 
-    # 첫 번째 리포트 전후 비교
     orig         = reports[0]["full_text"]
     cleaned_text = cleaned[0]["clean_text"]
 

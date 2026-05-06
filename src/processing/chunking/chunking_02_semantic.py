@@ -136,6 +136,7 @@ if __name__ == "__main__":
     from pathlib import Path
     import sys
     from dotenv import load_dotenv
+    from src.processing.cleaner import clean_reports  # ← 추가
 
     load_dotenv()
 
@@ -151,7 +152,8 @@ if __name__ == "__main__":
     print(f"📂 리포트 {len(reports)}개 로드")
     print(f"⚠️  OpenAI Embedding API 호출 시작 (비용 발생)\n")
 
-    result = chunk_reports(reports)
+    cleaned = clean_reports(reports, verbose=False)   # ← 추가
+    result = chunk_reports(cleaned)                   # ← reports → cleaned
 
     print(f"\n[전략 2: {STRATEGY_NAME}]")
     print(f"  청크 수     : {result.chunk_count}")
