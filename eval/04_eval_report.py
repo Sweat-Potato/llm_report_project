@@ -349,7 +349,6 @@ def main():
             "faithfulness"       : _eval_faithfulness(llm, text, sources),
             "investment_utility" : _eval_investment_utility(llm, text),
             "balance"            : _eval_balance(llm, text),
-            "sem_score"          : _eval_semscore(text, sources),
         }
 
         metric_keys = [k for k in record if k != "filename"]
@@ -362,13 +361,12 @@ def main():
         print(f"    출처 충실도   : {record['faithfulness']:.3f}")
         print(f"    투자 실용성   : {record['investment_utility']:.3f}")
         print(f"    관점 균형성   : {record['balance']:.3f}")
-        print(f"    의미 유사도   : {record['sem_score']:.3f}")
         print(f"    ──────────────────────────────────")
         print(f"    평균          : {record['average']:.3f}")
 
-    # 전체 평균 출력 (sem_score 포함 — 버그 수정)
+    # 전체 평균 출력
     df = pd.DataFrame(results)
-    metric_cols = ["structure", "finance_terms", "faithfulness", "investment_utility", "balance", "sem_score"]
+    metric_cols = ["structure", "finance_terms", "faithfulness", "investment_utility", "balance"]
     overall_scores = {col: round(df[col].mean(), 3) for col in metric_cols}
     print_score_summary(overall_scores, label="전체 리포트 평균 점수")
 
