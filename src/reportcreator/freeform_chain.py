@@ -285,7 +285,7 @@ JSON만 반환(설명 없이)."""),
         "structure_hint": "종합 리서치 리포트 — 시장현황·증권사별 분석·논거·리스크·전망·전략을 모두 포함",
     }, ensure_ascii=False)),
 
-    ("human", "{question}"),
+    ("human", "오늘 날짜: {today}\n\n질문: {question}")
 ])
 
 
@@ -381,8 +381,12 @@ def _validate_and_filter_requested_scope(docs: list[Document], intent: dict) -> 
 
 
 def _analyze_intent(question: str) -> dict:
+
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m")
+
     chain = _INTENT_PROMPT | _llm_fast()
-    raw   = chain.invoke({"question": question}).content.strip()
+    raw = chain.invoke({"question": question, "today": today}).content.strip()
     raw   = re.sub(r'^```json\s*', '', raw)
     raw   = re.sub(r'\s*```$',     '', raw)
     try:
@@ -443,7 +447,8 @@ def _collect_chunks(
             print(f"  → 사전 증권사 필터링: {target_brokers} ({len(pre_filtered)}개)")
 
         if not pre_filtered:
-            print(f"  ⚠️ 필터링 결과 없음 → 전체 청크로 검색")
+            print(f"  ⚠️ 필터링 결과 없음 → 해당 조건의 리포트가 없습니다.")
+            return []  # ← 전체 검색 fallback 제거
         else:
             # 필터링된 청크로 BM25+벡터 앙상블 재구성
             try:
