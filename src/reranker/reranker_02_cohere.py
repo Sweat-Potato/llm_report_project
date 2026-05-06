@@ -41,7 +41,7 @@ class CohereReranker:
         self._client    = None   # lazy loading
 
     def _load_client(self):
-        """최초 사용 시 Cohere 클라이언트 초기화"""
+        """최초 사용 시 Cohere 클라이언트 초기화 (SDK v5 대응)"""
         if self._client is None:
             import cohere
             api_key = os.getenv("COHERE_API_KEY")
@@ -51,7 +51,12 @@ class CohereReranker:
                     ".env 파일에 COHERE_API_KEY=... 설정하세요."
                 )
             print(f"Cohere Reranker 초기화: {self.model_name}")
-            self._client = cohere.Client(api_key=api_key)
+            # SDK v5: ClientV2 사용 + 구버전 엔드포인트 명시
+            # api.cohere.com 이 네트워크에서 막히는 경우 api.cohere.ai 로 우회
+            self._client = cohere.ClientV2(
+                api_key  = api_key,
+                base_url = "https://api.cohere.ai",
+            )
             print("Cohere Reranker 초기화 완료")
         return self._client
 
@@ -76,11 +81,11 @@ class CohereReranker:
 
         client = self._load_client()
 
-        # Cohere API 호출
+        # Cohere API 호출 (SDK v5: documents를 dict 리스트로 전달)
         response = client.rerank(
             model     = self.model_name,
             query     = query,
-            documents = [doc.page_content for doc in docs],
+            documents = [{"text": doc.page_content} for doc in docs],
             top_n     = len(docs),   # 전체 점수 받고 직접 필터링
         )
 
