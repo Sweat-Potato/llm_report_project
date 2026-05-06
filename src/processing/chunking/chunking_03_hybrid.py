@@ -6,8 +6,7 @@ chunking_03_hybrid.py
   - 텍스트 길이에 따라 청킹 전략 자동 분기
     · 1000자 미만  : 문장 단위 청킹 (sentence)
     · 1000~20000자 : Semantic Chunking (OpenAI 임베딩 기반)
-    · 20000~40000자: RecursiveCharacterTextSplitter (chunk_size=700)
-    · 40000자 초과 : RecursiveCharacterTextSplitter (chunk_size=500)
+    · 20000자 초과: RecursiveCharacterTextSplitter (chunk_size=600)
   - Semantic: 문장 임베딩 유사도 기반 breakpoint 감지
   - threshold를 텍스트 길이에 따라 자동 조정 (60~65)
   - clean_text 우선 사용 (Cleaner 출력), 없으면 full_text fallback
@@ -36,11 +35,8 @@ STRATEGY_NAME = "chunking_03_hybrid"
 # ── 파라미터 ──────────────────────────────────────
 SHORT_THRESHOLD  = 1000    # 이하: 문장 단위 청킹
 LONG_THRESHOLD   = 20000   # 초과: recursive fallback
-MIN_CHUNK_SIZE   = 50      # 이하 청크 제외
+MIN_CHUNK_SIZE   = 100      # 이하 청크 제외
 
-# recursive fallback 파라미터
-VERY_LONG_THRESHOLD = 40000   # 초과: chunk_size=500 (매우 긴 리포트)
-                               # 이하: chunk_size=700 (중간-긴 리포트)
 
 RECURSIVE_SEPARATORS = [
     "\n\n\n", "\n\n", "\n",
@@ -50,28 +46,19 @@ RECURSIVE_SEPARATORS = [
 ]
 
 def _get_recursive_params(text_length: int) -> tuple[int, int]:
-    """
-    텍스트 길이에 따라 recursive 파라미터 조정
-    20000~40000자: chunk_size=700, overlap=70  (중간-긴 리포트)
-    40000자 초과 : chunk_size=500, overlap=50  (매우 긴 리포트)
-    """
-    if text_length <= VERY_LONG_THRESHOLD:
-        return 700, 70   # 중간-긴 리포트: 문단 단위에 가깝게
-    else:
-        return 500, 50   # 매우 긴 리포트: 검색 정밀도 우선
+    return 600,90
 
 
 # ─────────────────────────────────────
 # Semantic Chunker
 # ─────────────────────────────────────
 def _get_threshold(text_length: int) -> int:
-    """텍스트 길이에 따라 threshold 자동 조정"""
     if text_length < 5000:
-        return 60   # 짧은 리포트 (5p 이하)
+        return 50
     elif text_length < 20000:
-        return 65   # 중간 리포트 (10~15p)
+        return 55
     else:
-        return 70   # 긴 리포트 (30p 이상)
+        return 60
 
 
 def _build_semantic_chunker(text_length: int) -> SemanticChunker:
@@ -94,6 +81,9 @@ def _chunk_single(text: str) -> tuple[list[str], str]:
     """
     텍스트를 청킹하여 (텍스트 리스트, 방법명) 반환
     """
+
+    MAX_CHUNK_SIZE = 700 
+
     if len(text) < SHORT_THRESHOLD:
         # 문장 단위 청킹
         lines  = text.split("\n")
@@ -134,9 +124,24 @@ def _chunk_single(text: str) -> tuple[list[str], str]:
         return raw_texts, "recursive_fallback"
 
     else:
-        # Semantic Chunking
         chunker   = _build_semantic_chunker(len(text))
         raw_texts = chunker.split_text(text)
+    
+        # ← 추가: 너무 긴 청크는 recursive로 재분할
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=600,
+            chunk_overlap=90,
+            separators=RECURSIVE_SEPARATORS,
+            length_function=len,
+            is_separator_regex=False,
+    )
+        final_texts = []
+        for t in raw_texts:
+            if len(t) > MAX_CHUNK_SIZE:
+                final_texts.extend(splitter.split_text(t))
+            else:
+                final_texts.append(t)
+        raw_texts = final_texts
         return raw_texts, "semantic_v2"
 
 
@@ -176,6 +181,8 @@ def chunk_reports(reports: list[dict]) -> ChunkingResult:
 
         for local_idx, text in enumerate(texts):
             if not text.strip():
+                continue
+            if len(text) < MIN_CHUNK_SIZE:  # ← 추가
                 continue
             chunk = Chunk(
                 chunk_id     = make_chunk_id(
