@@ -66,12 +66,33 @@ DB_PATH = str(VS_BASE_DIR / VECTORSTORE.STRATEGY_NAME / EMBEDDING.STRATEGY_NAME 
 # ── 검색 ──────────────────────────────────────────────────────────────────────
 
 def search(retrievers, query: str, top_n: int = 10):
-    """router → retriever 자동 선택 → Rerank 후 결과 출력"""
-    candidates = ret_router.retrieve(retrievers, query, k=40)
-    docs       = RERANKER.rerank(query, candidates, top_n=top_n)
+    """intent 분류 + 메타데이터 필터링(섹터·기간·증권사) → Rerank 후 결과 출력"""
+    from src.reportcreator.freeform_chain import _analyze_intent, _collect_chunks
+
+    intent_data = _analyze_intent(query)
+    _intent = (
+        "balanced"
+        if intent_data["question_type"] in ("broker_comparison", "consensus", "other")
+        else "ensemble"
+    )
+
+    docs = _collect_chunks(
+        retrievers,
+        queries        = intent_data["search_queries"],
+        target_brokers = intent_data["target_brokers"],
+        target_period  = intent_data.get("target_period"),
+        target_sector  = intent_data.get("target_sector"),
+        rerank_fn      = RERANKER.rerank,
+        k_per_query    = 40,
+        top_n          = top_n,
+        intent         = _intent,
+    )
 
     print(f"\n검색어: '{query}'")
-    print(f"후보 {len(candidates)}개 → Rerank 후 {len(docs)}개")
+    print(f"섹터: {intent_data.get('target_sector') or '전체'} | "
+          f"기간: {intent_data.get('target_period') or '전체'} | "
+          f"증권사: {', '.join(intent_data['target_brokers']) if intent_data['target_brokers'] else '전체'}")
+    print(f"결과 {len(docs)}개")
     print("=" * 60)
 
     for i, doc in enumerate(docs, 1):
