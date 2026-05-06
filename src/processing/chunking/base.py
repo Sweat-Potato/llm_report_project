@@ -83,6 +83,19 @@ class ChunkingResult:
         print(f"[저장] {out}  ({self.chunk_count}개 청크)")
 
 
+    # ChunkingResult 클래스 안에 추가
+    @classmethod
+    def load(cls, path: str) -> "ChunkingResult":
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        chunks = [Chunk(**c) for c in data["chunks"]]
+        return cls(
+            strategy     = data["strategy"],
+            chunks       = chunks,
+            report_count = data["report_count"],
+            total_chars  = data["total_chars"],
+    )
+    
 # ─────────────────────────────────────────────────
 # 공통 유틸
 # ─────────────────────────────────────────────────

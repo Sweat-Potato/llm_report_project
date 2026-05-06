@@ -39,8 +39,9 @@ load_dotenv()
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── 청킹 전략 (하나만 주석 해제) ──────────────────────────────────────────────
-from src.processing.chunking import chunking_01_recursive as CHUNKING
-# from src.processing.chunking import chunking_03_hybrid   as CHUNKING
+#from src.processing.chunking import chunking_01_recursive as CHUNKING
+#from src.processing.chunking import chunking_02_semantic as CHUNKING
+from src.processing.chunking import chunking_03_hybrid   as CHUNKING
 # from src.processing.chunking import chunking_04_sentence as CHUNKING
 
 # ── 임베딩 전략 ────────────────────────────────────────────────────────────────
