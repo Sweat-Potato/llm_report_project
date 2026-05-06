@@ -1,23 +1,21 @@
 """
-app.py — 리서치 리포트 RAG 시스템 웹 UI
-Horizon UI Chakra 디자인 참고
+app2.py — 리서치 리포트 RAG 시스템 웹 UI
+Mastercard Design System 참고 (크림 캔버스 · 잉크 블랙 · 시그널 오렌지)
 """
 import os
+import re
 import sys
 import time
 from pathlib import Path
 
-# PyTorch/OpenMP 충돌 방지 — 반드시 torch import 전에 설정
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
-# ChromaDB 텔레메트리 완전 비활성화
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 os.environ["CHROMA_TELEMETRY"] = "False"
 
-# ChromaDB telemetry 패치 (0.6.x capture() 버그 무음 처리)
 try:
     import chromadb.telemetry.product.posthog as _ph
-    _ph.Posthog.capture = lambda *a, **kw: None  # noqa: E731
+    _ph.Posthog.capture = lambda *a, **kw: None
 except Exception:
     pass
 
@@ -29,303 +27,362 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
+_KO_SENTENCE_ENDS = ('다.', '다,', '며,', '며.', '고,', '고.', '한다.', '된다.', '한다,', '이다.', '이다,')
+
+def _fix_md_paragraphs(text: str) -> str:
+    """LLM 마크다운 출력 정규화:
+    1) 한국어 문장으로 끝나는 ## / ### 헤딩 → 일반 텍스트로 변환 (가짜 헤딩 제거)
+    2) 서술형 문단의 단일 \\n → \\n\\n (Markdown 단락 분리 보장)
+    표(|), 인용(>), 리스트(-/*), 코드블록(```) 은 그대로 유지."""
+    lines = text.split('\n')
+    out = []
+    in_code = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('```'):
+            in_code = not in_code
+
+        # 한국어 문장 어미로 끝나는 ## / ### → 일반 텍스트
+        if not in_code and re.match(r'^#{2,3}\s+', stripped):
+            content = re.sub(r'^#{2,3}\s+', '', stripped)
+            if any(content.endswith(e) for e in _KO_SENTENCE_ENDS):
+                line = content
+
+        out.append(line)
+        if in_code or i >= len(lines) - 1:
+            continue
+        curr, nxt = line.strip(), lines[i + 1].strip()
+        special = lambda s: not s or s.startswith(('#', '|', '>', '-', '*', '`', '!'))
+        if curr and nxt and not special(curr) and not special(nxt):
+            out.append('')
+    return '\n'.join(out)
+
+
 # ── 페이지 설정 ────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="리서치 리포트 RAG",
-    page_icon="📊",
+    page_title="ResearchRAG",
+    page_icon="🟠",
     layout="wide",
     initial_sidebar_state="auto",
 )
 
-# ── 전역 CSS (Horizon UI Chakra 스타일) ───────────────────────────────────────
+# ── Mastercard 디자인 CSS ──────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  /* ── 기본 색상 토큰 ── */
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
+
   :root {
-    --brand:      #4318FF;
-    --brand-light:#6B48FF;
-    --bg-page:    #F4F7FE;
-    --bg-card:    #FFFFFF;
-    --text-main:  #2B3674;
-    --text-sub:   #A3AED0;
-    --text-body:  #707EAE;
-    --border:     #E9EDF7;
-    --success:    #01B574;
-    --warning:    #FFB547;
-    --danger:     #EE5D50;
-    --info:       #39B8FF;
-    --gradient:   linear-gradient(135deg, #4318FF 0%, #868CFF 100%);
+    --canvas:  #F3F0EE;
+    --ink:     #141413;
+    --orange:  #C87B52;
+    --orange-light: #D8956E;
+    --white:   #FFFFFF;
+    --gray:    #7A7570;
+    --gray-light: #B5B0AB;
+    --border:  #DDD9D5;
+    --card-bg: #FFFFFF;
+    --ink-soft: #2A2926;
   }
 
-  /* ── 전체 배경 ── */
-  .stApp { background: var(--bg-page); }
+  /* ── 전체 폰트·배경 ── */
+  html, body, [class*="css"] {
+    font-family: 'DM Sans', 'Sofia Sans', -apple-system, sans-serif !important;
+  }
+  .stApp { background: var(--canvas); }
 
   /* ── 사이드바 ── */
   [data-testid="stSidebar"] {
-    background: var(--bg-card);
-    border-right: 1px solid var(--border);
+    background: var(--ink) !important;
+    border-right: none;
   }
-  [data-testid="stSidebar"] .stMarkdown h1,
-  [data-testid="stSidebar"] .stMarkdown h2,
-  [data-testid="stSidebar"] .stMarkdown h3 {
-    color: var(--text-main);
-  }
+  [data-testid="stSidebar"] * { color: #E8E4E0 !important; }
+  [data-testid="stSidebar"] .stRadio label { color: #B5B0AB !important; }
+  [data-testid="stSidebar"] hr { border-color: #2A2926 !important; }
 
-  /* ── 메인 컨텐츠 여백 ── */
+  /* ── 메인 여백 ── */
   .main .block-container {
-    padding: 1.5rem 2rem 2rem;
-    max-width: 1400px;
+    padding: 2rem 2.5rem 3rem;
+    max-width: 1300px;
   }
 
-  /* ── 카드 컴포넌트 ── */
-  .hz-card {
-    background: var(--bg-card);
-    border-radius: 20px;
-    padding: 1.5rem 1.8rem;
+  /* ── 카드 ── */
+  .mc-card {
+    background: var(--white);
+    border-radius: 32px;
+    padding: 2rem 2.2rem;
     border: 1px solid var(--border);
-    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.08);
-    margin-bottom: 1rem;
+    box-shadow: 0 2px 24px rgba(20,20,19,0.06);
+    margin-bottom: 1.2rem;
   }
-  .hz-card-sm {
-    background: var(--bg-card);
-    border-radius: 16px;
-    padding: 1.2rem 1.4rem;
+  .mc-card-sm {
+    background: var(--white);
+    border-radius: 24px;
+    padding: 1.2rem 1.5rem;
     border: 1px solid var(--border);
-    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.06);
+    box-shadow: 0 1px 12px rgba(20,20,19,0.04);
     margin-bottom: 0.75rem;
+  }
+
+  /* ── 히어로 배너 ── */
+  .mc-hero {
+    background: var(--ink);
+    border-radius: 40px;
+    padding: 2.8rem 3rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .mc-hero::after {
+    content: '';
+    position: absolute;
+    right: -60px; top: -60px;
+    width: 280px; height: 280px;
+    border-radius: 50%;
+    background: var(--orange);
+    opacity: 0.15;
+  }
+  .mc-hero-title {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--white);
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    margin: 0 0 0.5rem;
+  }
+  .mc-hero-sub {
+    font-size: 1rem;
+    color: #B5B0AB;
+    font-weight: 400;
+    margin: 0;
   }
 
   /* ── 스탯 카드 ── */
-  .hz-stat {
-    background: var(--bg-card);
-    border-radius: 20px;
-    padding: 1.4rem 1.6rem;
+  .mc-stat {
+    background: var(--white);
+    border-radius: 28px;
+    padding: 1.6rem 1.8rem;
     border: 1px solid var(--border);
-    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.08);
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+    box-shadow: 0 2px 16px rgba(20,20,19,0.05);
   }
-  .hz-stat-icon {
-    width: 56px; height: 56px;
-    border-radius: 50%;
-    background: var(--gradient);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.4rem;
-    flex-shrink: 0;
-  }
-  .hz-stat-label {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--text-sub);
+  .mc-stat-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--gray);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-bottom: 0.25rem;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.5rem;
   }
-  .hz-stat-value {
-    font-size: 1.5rem;
+  .mc-stat-value {
+    font-size: 2rem;
     font-weight: 700;
-    color: var(--text-main);
-    line-height: 1.2;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    line-height: 1;
   }
-
-  /* ── 페이지 타이틀 ── */
-  .hz-page-title {
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: var(--text-main);
-    margin: 0 0 0.2rem;
-  }
-  .hz-page-sub {
-    font-size: 0.88rem;
-    color: var(--text-sub);
-    margin: 0 0 1.5rem;
+  .mc-stat-icon {
+    font-size: 1.4rem;
+    margin-bottom: 0.6rem;
   }
 
   /* ── 섹션 헤더 ── */
-  .hz-section-header {
-    font-size: 1rem;
+  .mc-section {
+    font-size: 1.1rem;
     font-weight: 700;
-    color: var(--text-main);
-    margin-bottom: 0.75rem;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+    margin-bottom: 0.9rem;
   }
 
-  /* ── 배지 ── */
-  .hz-badge {
+  /* ── 배지·필 ── */
+  .mc-pill {
     display: inline-block;
-    padding: 0.18rem 0.65rem;
+    padding: 0.25rem 0.9rem;
     border-radius: 999px;
     font-size: 0.72rem;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
   }
-  .badge-brand  { background: #EBE9FF; color: var(--brand); }
-  .badge-green  { background: #E6FAF5; color: var(--success); }
-  .badge-orange { background: #FFF3DF; color: var(--warning); }
-  .badge-red    { background: #FFEAEA; color: var(--danger); }
-  .badge-blue   { background: #E3F8FF; color: var(--info); }
-  .badge-gray   { background: var(--border); color: var(--text-body); }
+  .pill-ink    { background: var(--ink); color: var(--white); }
+  .pill-orange { background: var(--orange); color: var(--white); }
+  .pill-canvas { background: var(--canvas); color: var(--ink); border: 1px solid var(--border); }
+  .pill-outline{ background: transparent; color: var(--orange); border: 1.5px solid var(--orange); }
 
-  /* ── 질문 유형 레이블 ── */
-  .qt-pill {
-    display: inline-flex; align-items: center; gap: 0.3rem;
-    padding: 0.3rem 0.9rem;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-  }
+  /* ── 질문 유형별 색 ── */
+  .qt-fact      { background: #1A1918; color: #F3F0EE; }
+  .qt-coverage  { background: #E8F5E9; color: #2E7D32; border: 1px solid #C8E6C9; }
+  .qt-timeline  { background: #FFF3E0; color: #E65100; border: 1px solid #FFE0B2; }
+  .qt-broker    { background: #141413; color: var(--white); }
+  .qt-risk      { background: #FFEBEE; color: #B71C1C; border: 1px solid #FFCDD2; }
+  .qt-consensus { background: #E8F5E9; color: #1B5E20; border: 1px solid #C8E6C9; }
+  .qt-other     { background: var(--canvas); color: var(--gray); border: 1px solid var(--border); }
 
   /* ── 검색 결과 카드 ── */
-  .result-card {
-    background: var(--bg-card);
-    border-radius: 16px;
-    padding: 1.2rem 1.5rem;
-    border-left: 4px solid var(--brand);
-    box-shadow: 0 2px 12px rgba(67,24,255,0.06);
-    margin-bottom: 0.85rem;
+  .mc-result {
+    background: var(--white);
+    border-radius: 20px;
+    padding: 1.3rem 1.6rem;
+    border: 1px solid var(--border);
+    border-left: 5px solid var(--orange);
+    margin-bottom: 0.9rem;
+    box-shadow: 0 1px 8px rgba(20,20,19,0.04);
   }
-  .result-meta {
-    font-size: 0.75rem;
-    color: var(--text-sub);
-    margin-bottom: 0.4rem;
+  .mc-result-meta {
+    font-size: 0.74rem;
+    color: var(--gray);
+    margin-bottom: 0.35rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
   }
-  .result-title {
+  .mc-result-title {
     font-size: 0.92rem;
     font-weight: 600;
-    color: var(--text-main);
-    margin-bottom: 0.4rem;
+    color: var(--ink);
+    margin-bottom: 0.35rem;
   }
-  .result-body {
-    font-size: 0.85rem;
-    color: var(--text-body);
-    line-height: 1.65;
-  }
-  .result-score {
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--brand);
-    background: #EBE9FF;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
+  .mc-result-body {
+    font-size: 0.84rem;
+    color: var(--gray);
+    line-height: 1.7;
   }
 
-  /* ── 리포트 출력 영역 ── */
-  .report-area {
-    background: var(--bg-card);
-    border-radius: 20px;
-    padding: 2rem 2.4rem;
+  /* ── 리포트 본문 ── */
+  .mc-report {
+    background: var(--white);
+    border-radius: 32px;
+    padding: 2.5rem 3rem;
     border: 1px solid var(--border);
-    box-shadow: 14px 17px 40px 4px rgba(112,144,176,0.08);
-    line-height: 1.8;
-    color: var(--text-main);
+    box-shadow: 0 4px 32px rgba(20,20,19,0.07);
+    line-height: 1.85;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
   }
-  .report-area h1,h2,h3 { color: var(--text-main); }
 
-  /* ── 입력 필드 커스터마이징 ── */
+  /* ── 입력 필드 ── */
   .stTextInput > div > div > input,
   .stTextArea > div > div > textarea {
-    border-radius: 12px !important;
-    border: 1px solid var(--border) !important;
-    background: var(--bg-page) !important;
-    color: var(--text-main) !important;
-    font-size: 0.92rem !important;
-    padding: 0.6rem 1rem !important;
+    border-radius: 16px !important;
+    border: 1.5px solid var(--border) !important;
+    background: var(--white) !important;
+    color: var(--ink) !important;
+    font-size: 0.93rem !important;
+    padding: 0.65rem 1rem !important;
+    font-family: 'DM Sans', sans-serif !important;
   }
   .stTextInput > div > div > input:focus,
   .stTextArea > div > div > textarea:focus {
-    border-color: var(--brand) !important;
-    box-shadow: 0 0 0 3px rgba(67,24,255,0.12) !important;
+    border-color: var(--orange) !important;
+    box-shadow: 0 0 0 3px rgba(207,69,0,0.10) !important;
   }
 
   /* ── 버튼 ── */
   .stButton > button {
-    background: var(--gradient) !important;
-    color: white !important;
+    background: var(--ink) !important;
+    color: var(--white) !important;
     border: none !important;
-    border-radius: 12px !important;
-    padding: 0.55rem 1.6rem !important;
+    border-radius: 999px !important;
+    padding: 0.6rem 2rem !important;
     font-weight: 600 !important;
     font-size: 0.88rem !important;
-    transition: opacity 0.15s ease !important;
-    box-shadow: 0 4px 16px rgba(67,24,255,0.3) !important;
+    letter-spacing: 0.01em !important;
+    transition: background 0.15s !important;
+    font-family: 'DM Sans', sans-serif !important;
   }
-  .stButton > button:hover { opacity: 0.88 !important; }
+  .stButton > button:hover {
+    background: var(--orange) !important;
+  }
 
-  /* ── 라디오/셀렉트 ── */
-  .stRadio label { color: var(--text-body) !important; font-size: 0.88rem !important; }
-  .stSelectbox > div > div { border-radius: 12px !important; }
+  /* ── 폼 제출 버튼 (오렌지) ── */
+  [data-testid="stFormSubmitButton"] > button {
+    background: var(--orange) !important;
+    padding: 0.65rem 2.5rem !important;
+  }
+  [data-testid="stFormSubmitButton"] > button:hover {
+    background: var(--orange-light) !important;
+  }
 
-  /* ── 구분선 ── */
-  hr { border: none; border-top: 1px solid var(--border); margin: 1.2rem 0; }
+  /* ── 슬라이더·토글 ── */
+  .stSlider [data-baseweb="slider"] div[role="slider"] {
+    background: var(--orange) !important;
+  }
 
-  /* ── 사이드바 메뉴 아이템 ── */
-  .nav-item {
+  /* ── 사이드바 라디오 ── */
+  .stRadio > div { gap: 0.2rem !important; }
+  .stRadio label {
+    padding: 0.55rem 1rem !important;
+    border-radius: 999px !important;
+    font-size: 0.88rem !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    transition: background 0.12s !important;
+  }
+
+  /* ── 로고 영역 ── */
+  .mc-logo {
     display: flex;
     align-items: center;
-    gap: 0.7rem;
-    padding: 0.65rem 1rem;
-    border-radius: 12px;
-    cursor: pointer;
-    margin-bottom: 0.2rem;
-    font-size: 0.88rem;
-    font-weight: 500;
-    color: var(--text-body);
-    transition: all 0.15s;
-  }
-  .nav-item.active {
-    background: var(--gradient);
-    color: white;
-    font-weight: 600;
-  }
-  .nav-item:hover:not(.active) {
-    background: var(--bg-page);
-    color: var(--brand);
-  }
-
-  /* ── 로고 ── */
-  .sidebar-logo {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 0 1.5rem;
+    gap: 0.8rem;
+    padding: 0.3rem 0 1.6rem;
     margin-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid #2A2926;
   }
-  .sidebar-logo-icon {
-    width: 42px; height: 42px;
-    background: var(--gradient);
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.3rem;
+  .mc-logo-circles {
+    position: relative;
+    width: 42px;
+    height: 26px;
   }
-  .sidebar-logo-text {
+  .mc-logo-c1, .mc-logo-c2 {
+    position: absolute;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+  }
+  .mc-logo-c1 { background: #EB001B; left: 0; }
+  .mc-logo-c2 { background: #F79E1B; right: 0; opacity: 0.9; }
+  .mc-logo-name {
     font-size: 1rem;
     font-weight: 700;
-    color: var(--text-main);
-    line-height: 1.2;
+    color: #F3F0EE !important;
+    letter-spacing: -0.01em;
   }
-  .sidebar-logo-sub {
-    font-size: 0.72rem;
-    color: var(--text-sub);
+  .mc-logo-sub {
+    font-size: 0.7rem;
+    color: #7A7570 !important;
+    margin-top: 0.1rem;
   }
 
-  /* ── 스피너 오버라이드 ── */
-  .stSpinner > div { color: var(--brand) !important; }
+  /* ── 구분선 ── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 1.4rem 0; }
+
+  /* ── 시스템 정보 텍스트 ── */
+  .sys-info {
+    font-size: 0.76rem;
+    line-height: 1.8;
+    color: #7A7570 !important;
+    padding: 0 0.3rem;
+  }
+  .sys-info b { color: #B5B0AB !important; }
 
   /* ── expander ── */
-  details { background: var(--bg-page) !important; border-radius: 12px !important; }
+  details {
+    background: var(--canvas) !important;
+    border-radius: 16px !important;
+    border: 1px solid var(--border) !important;
+    margin-bottom: 0.5rem !important;
+  }
 
-  /* ── hide default streamlit elements ── */
+  /* ── 프로그레스 ── */
+  .stProgress > div > div { background: var(--orange) !important; }
+
+  /* ── 숨김 ── */
   #MainMenu { visibility: hidden; }
   footer { visibility: hidden; }
-  /* 헤더 자체는 숨기지 않음 — 사이드바 토글 버튼이 여기 있음 */
-  /* 헤더를 투명하게만 처리 */
   header { background: transparent !important; box-shadow: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── 전략 모듈 import (캐싱) ────────────────────────────────────────────────────
+# ── 백엔드 로드 (app.py와 동일) ───────────────────────────────────────────────
 
 @st.cache_resource(show_spinner=False)
 def load_backend():
@@ -349,7 +406,6 @@ def load_backend():
         Document(page_content=text, metadata=meta)
         for text, meta in zip(results["documents"], results["metadatas"])
     ]
-    # router.build_retriever → (ret1_instance, ret2_instance, all_docs) 튜플 반환
     retriever_tuple = ROUTER.build_retriever(vectorstore, all_docs, k=40)
     return retriever_tuple, ROUTER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, len(all_docs)
 
@@ -357,357 +413,264 @@ def load_backend():
 # ── 헬퍼 ───────────────────────────────────────────────────────────────────────
 
 QUESTION_TYPE_META = {
-    "fact_lookup":       ("🔍", "사실 확인",     "badge-blue"),
-    "coverage_summary":  ("📋", "커버리지 요약",  "badge-green"),
-    "timeline":          ("📅", "타임라인",       "badge-orange"),
-    "broker_comparison": ("⚖️",  "증권사 비교",   "badge-brand"),
-    "risk":              ("⚠️",  "리스크 분석",   "badge-red"),
-    "consensus":         ("🤝", "컨센서스",       "badge-green"),
-    "other":             ("📝", "종합 리포트",    "badge-gray"),
+    "fact_lookup":       ("🔍", "사실 확인",    "qt-fact"),
+    "coverage_summary":  ("📋", "커버리지",     "qt-coverage"),
+    "timeline":          ("📅", "타임라인",     "qt-timeline"),
+    "broker_comparison": ("⚖️",  "증권사 비교", "qt-broker"),
+    "risk":              ("⚠️",  "리스크",      "qt-risk"),
+    "consensus":         ("🤝", "컨센서스",     "qt-consensus"),
+    "other":             ("📝", "종합 리포트",  "qt-other"),
 }
 
 SECTOR_COLORS = {
-    "반도체": "badge-blue",
-    "조선":   "badge-green",
-    "AI인프라":"badge-brand",
-    "자동차": "badge-orange",
-    "바이오": "badge-red",
+    "반도체": "pill-ink",
+    "조선":   "pill-canvas",
+    "AI인프라":"pill-orange",
+    "자동차": "pill-canvas",
+    "바이오": "pill-canvas",
 }
 
-def score_bar(score: float | str) -> str:
-    try:
-        s = float(score)
-        pct = max(0, min(100, int(s * 100)))
-        color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
-        return f"""
-        <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.4rem;">
-          <div style="flex:1;height:6px;background:#E9EDF7;border-radius:999px;overflow:hidden;">
-            <div style="width:{pct}%;height:100%;background:{color};border-radius:999px;"></div>
-          </div>
-          <span style="font-size:0.72rem;font-weight:700;color:{color};">{s:.3f}</span>
-        </div>"""
-    except Exception:
-        return ""
-
-
-def sector_badge(sector: str) -> str:
-    cls = SECTOR_COLORS.get(sector, "badge-gray")
-    return f'<span class="hz-badge {cls}">{sector}</span>'
+def sector_pill(sector: str) -> str:
+    cls = SECTOR_COLORS.get(sector, "pill-canvas")
+    return f'<span class="mc-pill {cls}">{sector}</span>'
 
 
 # ── 사이드바 ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("""
-    <div class="sidebar-logo">
-      <div class="sidebar-logo-icon">📊</div>
+    <div class="mc-logo">
       <div>
-        <div class="sidebar-logo-text">ResearchRAG</div>
-        <div class="sidebar-logo-sub">증권사 리포트 분석 시스템</div>
+        <div class="mc-logo-name">ResearchRAG</div>
+        <div class="mc-logo-sub">증권사 리포트 분석</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
 
     page = st.radio(
         "페이지 선택",
-        options=["🏠  대시보드", "💬  질문 · 분석", "📂  최근 리포트"],
+        options=[" 대시보드", " 질문 · 분석", " 최근 리포트"],
         label_visibility="collapsed",
     )
     page = page.split("  ", 1)[-1].strip()
 
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown('<div style="font-size:0.72rem;font-weight:700;color:var(--text-sub);letter-spacing:0.08em;padding:0 0.3rem 0.4rem;">검색 설정</div>', unsafe_allow_html=True)
-
-    top_n = st.slider("최종 결과 수 (Top-N)", min_value=3, max_value=20, value=10)
-    show_content = st.toggle("청크 전문 표시", value=False)
+    top_n = 15
 
     st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown('<div style="font-size:0.72rem;font-weight:700;color:var(--text-sub);letter-spacing:0.08em;padding:0 0.3rem 0.4rem;">시스템 정보</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:0.68rem;font-weight:700;color:#4A4744;letter-spacing:0.1em;text-transform:uppercase;padding:0 0.3rem 0.5rem;">시스템</div>', unsafe_allow_html=True)
 
-    with st.spinner("벡터스토어 로드 중…"):
+    with st.spinner("로드 중…"):
         retriever, ROUTER, RERANKER, EMBEDDING, VECTORSTORE, CHUNKING, total_chunks = load_backend()
 
     db_ok = retriever is not None
     if db_ok:
         st.markdown(f"""
-        <div style="font-size:0.78rem;color:var(--text-body);padding:0.2rem 0.3rem;">
-          <div>✅ ChromaDB 연결됨</div>
-          <div style="color:var(--text-sub);margin-top:0.3rem;">청크 수: <b style="color:var(--text-main);">{total_chunks:,}</b></div>
-          <div style="color:var(--text-sub);">청킹: <b style="color:var(--text-main);">{CHUNKING.STRATEGY_NAME}</b></div>
-          <div style="color:var(--text-sub);">리트리버: <b style="color:var(--text-main);">router (ensemble ↔ balanced)</b></div>
-          <div style="color:var(--text-sub);">리랭커: <b style="color:var(--text-main);">{RERANKER.STRATEGY_NAME}</b></div>
+        <div class="sys-info">
+          <div style="color:#C87B52;font-weight:700;margin-bottom:0.3rem;">● 연결됨</div>
+          <div>청크 <b>{total_chunks:,}개</b></div>
+          <div>청킹 <b>{CHUNKING.STRATEGY_NAME}</b></div>
+          <div>리트리버 <b>router</b></div>
+          <div>리랭커 <b>{RERANKER.STRATEGY_NAME}</b></div>
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.error("ChromaDB 없음 — `pipeline/ingest.py` 실행 필요")
+        st.error("DB 없음 — ingest.py 실행 필요")
 
 
 # ── 페이지: 대시보드 ───────────────────────────────────────────────────────────
 
 if page == "대시보드":
-    st.markdown('<p class="hz-page-title">대시보드</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hz-page-sub">리서치 리포트 RAG 시스템 현황</p>', unsafe_allow_html=True)
 
-    # 스탯 카드 행
+    # 히어로
+    st.markdown("""
+    <div class="mc-hero">
+      <p class="mc-hero-title">증권사 리포트<br>RAG 분석 시스템</p>
+      <p class="mc-hero-sub">자유형 질문 → 유형 자동 감지 → 분석 리포트 생성</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 스탯 카드
     c1, c2, c3, c4 = st.columns(4)
-
-    def stat_card(col, icon, label, value):
+    def stat(col, icon, label, val):
         col.markdown(f"""
-        <div class="hz-stat">
-          <div class="hz-stat-icon">{icon}</div>
-          <div>
-            <div class="hz-stat-label">{label}</div>
-            <div class="hz-stat-value">{value}</div>
-          </div>
+        <div class="mc-stat">
+          <div class="mc-stat-icon">{icon}</div>
+          <div class="mc-stat-label">{label}</div>
+          <div class="mc-stat-value">{val}</div>
         </div>
         """, unsafe_allow_html=True)
 
-    stat_card(c1, "📦", "총 청크 수", f"{total_chunks:,}" if db_ok else "—")
-    stat_card(c2, "🏢", "커버 증권사", "12개")
-    stat_card(c3, "📄", "질문 유형", "7가지")
-    stat_card(c4, "🧠", "임베딩 모델", "text-embedding-3-small")
+    stat(c1, "📦", "총 청크 수", f"{total_chunks:,}" if db_ok else "—")
+    stat(c2, "🏢", "커버 증권사", "12")
+    stat(c3, "🧩", "질문 유형", "7")
+    stat(c4, "⚡", "임베딩", "3-small")
 
     st.markdown("<br>", unsafe_allow_html=True)
-
-    left, right = st.columns([3, 2])
+    left, right = st.columns([3, 2], gap="large")
 
     with left:
-        st.markdown('<div class="hz-section-header">지원 질문 유형</div>', unsafe_allow_html=True)
-        for qt, (icon, label, badge) in QUESTION_TYPE_META.items():
+        st.markdown('<div class="mc-section">지원 질문 유형</div>', unsafe_allow_html=True)
+        for qt, (icon, label, cls) in QUESTION_TYPE_META.items():
             st.markdown(f"""
-            <div class="hz-card-sm" style="display:flex;align-items:center;gap:0.8rem;">
-              <span style="font-size:1.2rem;">{icon}</span>
+            <div class="mc-card-sm" style="display:flex;align-items:center;gap:1rem;">
+              <span style="font-size:1.15rem;">{icon}</span>
               <div style="flex:1;">
-                <span class="hz-badge {badge}">{label}</span>
-                <span style="font-size:0.78rem;color:var(--text-sub);margin-left:0.5rem;">{qt}</span>
+                <span class="mc-pill {cls}">{label}</span>
+                <span style="font-size:0.76rem;color:var(--gray);margin-left:0.5rem;">{qt}</span>
               </div>
             </div>
             """, unsafe_allow_html=True)
 
     with right:
-        st.markdown('<div class="hz-section-header">커버 증권사</div>', unsafe_allow_html=True)
-        brokers = ["하나증권", "키움증권", "DS투자증권", "IBK투자증권", "SK증권",
-                   "교보증권", "대신증권", "유안타증권", "유진투자증권",
-                   "한화투자증권", "iM증권", "한국IR협의회"]
+        st.markdown('<div class="mc-section">커버 증권사</div>', unsafe_allow_html=True)
+        brokers = [
+            "하나증권","키움증권","DS투자증권","IBK투자증권","SK증권",
+            "교보증권","대신증권","유안타증권","유진투자증권",
+            "한화투자증권","iM증권","한국IR협의회",
+        ]
         for b in brokers:
             st.markdown(f"""
-            <div style="display:flex;align-items:center;gap:0.6rem;padding:0.45rem 0.8rem;
-                        background:var(--bg-card);border-radius:10px;margin-bottom:0.4rem;
-                        border:1px solid var(--border);font-size:0.82rem;color:var(--text-body);">
-              <span style="width:8px;height:8px;background:var(--brand);border-radius:50%;display:inline-block;"></span>
+            <div style="display:flex;align-items:center;gap:0.6rem;
+                        padding:0.42rem 0.9rem;background:var(--white);
+                        border-radius:999px;border:1px solid var(--border);
+                        margin-bottom:0.35rem;font-size:0.82rem;color:var(--ink);">
+              <span style="width:6px;height:6px;background:var(--orange);
+                           border-radius:50%;display:inline-block;"></span>
               {b}
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="hz-section-header">커버 섹터</div>', unsafe_allow_html=True)
-        sectors = ["반도체", "조선", "AI인프라", "자동차", "바이오"]
-        cols = st.columns(3)
-        for i, s in enumerate(sectors):
-            cols[i % 3].markdown(f'<span class="hz-badge {SECTOR_COLORS.get(s,"badge-gray")}" style="margin:0.2rem;">{s}</span>', unsafe_allow_html=True)
-
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="hz-card">', unsafe_allow_html=True)
-    st.markdown('<div class="hz-section-header">빠른 시작 — 질문 예시</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mc-card">', unsafe_allow_html=True)
+    st.markdown('<div class="mc-section">예시 질문</div>', unsafe_allow_html=True)
     examples = [
-        ("⚖️", "하나증권과 키움증권의 3월 반도체 의견 차이"),
-        ("⚠️", "조선업에서 언급된 리스크 요인 정리해줘"),
-        ("🤝", "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
-        ("📅", "이번 달 반도체 섹터 투자의견 변화"),
-        ("📋", "최근 AI 인프라 리포트 현황 정리해줘"),
+        ("⚖️", "broker_comparison", "하나증권과 키움증권의 3월 반도체 의견 차이"),
+        ("⚠️", "risk",              "조선업에서 언급된 리스크 요인 정리해줘"),
+        ("🤝", "consensus",         "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야"),
+        ("📅", "timeline",          "이번 달 반도체 섹터 투자의견 변화"),
+        ("📋", "coverage_summary",  "최근 AI 인프라 리포트 현황 정리해줘"),
     ]
-    for icon, ex in examples:
+    for icon, qt, ex in examples:
+        _, cls = QUESTION_TYPE_META[qt][1], QUESTION_TYPE_META[qt][2]
         st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:0.7rem;padding:0.5rem 0.8rem;
-                    background:var(--bg-page);border-radius:10px;margin-bottom:0.35rem;
-                    font-size:0.84rem;color:var(--text-body);">
-          <span>{icon}</span> {ex}
+        <div style="display:flex;align-items:center;gap:0.8rem;
+                    padding:0.6rem 1rem;background:var(--canvas);
+                    border-radius:14px;margin-bottom:0.4rem;">
+          <span>{icon}</span>
+          <span style="font-size:0.85rem;color:var(--ink-soft);">{ex}</span>
         </div>
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ── 페이지: 검색 ───────────────────────────────────────────────────────────────
-
-elif page == "__검색_삭제됨__":
-    st.markdown('<p class="hz-page-title">청크 검색</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hz-page-sub">Hybrid Search (BM25 + Vector) + BGE Cross-Encoder 리랭킹</p>', unsafe_allow_html=True)
-
-    if not db_ok:
-        st.error("ChromaDB가 없습니다. 먼저 `pipeline/ingest.py`를 실행해 주세요.")
-        st.stop()
-
-    with st.form("search_form"):
-        query = st.text_input("검색 키워드", placeholder="예: 반도체 업황, 조선 수주, AI 인프라 투자…")
-        submitted = st.form_submit_button("🔎  검색")
-
-    if submitted and query.strip():
-        with st.spinner("검색 중…"):
-            t0 = time.time()
-            candidates = RETRIEVER.retrieve(retriever, query, k=40)
-            docs       = RERANKER.rerank(query, candidates, top_n=top_n)
-            elapsed    = time.time() - t0
-
-        st.markdown(f"""
-        <div class="hz-card" style="display:flex;align-items:center;gap:1rem;padding:1rem 1.5rem;">
-          <div style="flex:1;">
-            <span style="font-weight:700;color:var(--text-main);">"{query}"</span>
-            <span style="color:var(--text-sub);font-size:0.82rem;margin-left:0.5rem;">검색 완료</span>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-size:0.75rem;color:var(--text-sub);">후보 → 최종</div>
-            <div style="font-weight:700;color:var(--brand);">{len(candidates)} → {len(docs)}개</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-size:0.75rem;color:var(--text-sub);">소요 시간</div>
-            <div style="font-weight:700;color:var(--text-main);">{elapsed:.2f}s</div>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        for i, doc in enumerate(docs, 1):
-            score  = doc.metadata.get("rerank_score", "-")
-            broker = doc.metadata.get("source_firm",  doc.metadata.get("broker", "-"))
-            date   = doc.metadata.get("report_date",  "-")
-            sector = doc.metadata.get("sector",        "-")
-            title  = doc.metadata.get("title",         "")
-            content = doc.page_content
-
-            sector_html = sector_badge(sector) if sector and sector != "-" else ""
-
-            try:
-                score_val = float(score)
-                pct = max(0, min(100, int(score_val * 100)))
-                bar_color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
-                score_html = f"""
-                <div style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;">
-                  <div style="width:120px;height:5px;background:#E9EDF7;border-radius:999px;overflow:hidden;">
-                    <div style="width:{pct}%;height:100%;background:{bar_color};border-radius:999px;"></div>
-                  </div>
-                  <span style="font-size:0.72rem;font-weight:700;color:{bar_color};">Rerank {score_val:.3f}</span>
-                </div>"""
-            except Exception:
-                score_html = ""
-
-            preview = content[:350] + ("…" if len(content) > 350 else "")
-
-            st.markdown(f"""
-            <div class="result-card">
-              <div class="result-meta">
-                <b style="color:var(--text-main);">#{i}</b>
-                &nbsp;·&nbsp; 🏢 {broker}
-                &nbsp;·&nbsp; 📅 {date}
-                &nbsp;&nbsp; {sector_html}
-              </div>
-              {'<div class="result-title">' + title[:60] + '</div>' if title else ''}
-              {score_html}
-              {'<div class="result-body" style="margin-top:0.6rem;">' + preview + '</div>' if show_content else ''}
-            </div>
-            """, unsafe_allow_html=True)
-
-            if show_content and len(content) > 350:
-                with st.expander("전문 보기"):
-                    st.text(content)
-
-    elif submitted:
-        st.warning("검색 키워드를 입력해 주세요.")
-
-
 # ── 페이지: 질문 · 분석 ────────────────────────────────────────────────────────
 
 elif page == "질문 · 분석":
-    st.markdown('<p class="hz-page-title">질문 · 분석 리포트</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hz-page-sub">자유형 질문을 입력하면 유형을 자동 감지해 분석 리포트를 생성합니다.</p>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="mc-hero" style="padding:2rem 2.5rem;">
+      <p class="mc-hero-title" style="font-size:1.6rem;">질문 · 분석 리포트</p>
+      <p class="mc-hero-sub">자유형 질문 → 유형 자동 감지 → 맞춤 리포트 생성</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     if not db_ok:
-        st.error("ChromaDB가 없습니다. 먼저 `pipeline/ingest.py`를 실행해 주세요.")
+        st.error("ChromaDB가 없습니다. `pipeline/ingest.py`를 실행해 주세요.")
         st.stop()
 
     from src.reportcreator.freeform_chain import answer_question
 
-    # 예시 질문 버튼
-    st.markdown('<div class="hz-section-header">빠른 질문 선택</div>', unsafe_allow_html=True)
+    # 예시 버튼
+    if "preset_q2" not in st.session_state:
+        st.session_state.preset_q2 = ""
+
     examples = [
         "하나증권과 키움증권의 3월 반도체 의견 차이",
         "조선업에서 언급된 리스크 요인 정리해줘",
-        "AI 인프라에 대해 증권사들이 공통으로 강조하는 게 뭐야",
-        "이번 달 반도체 섹터 투자의견 변화",
+        "AI 인프라에 대해 공통으로 강조하는 게 뭐야",
+        "이번 달 반도체 투자의견 변화",
     ]
     ex_cols = st.columns(len(examples))
-    preset_q = ""
     for col, ex in zip(ex_cols, examples):
-        if col.button(ex[:18] + "…", key=f"ex_{ex}"):
-            preset_q = ex
+        if col.button(ex[:14] + "…", key=f"ex2_{ex}"):
+            st.session_state.preset_q2 = ex
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    with st.form("ask_form"):
+    with st.form("ask_form2"):
         question = st.text_area(
-            "질문 입력",
-            value=preset_q,
+            "질문",
+            value=st.session_state.preset_q2,
             placeholder="예: 하나증권과 키움증권의 3월 반도체 의견 차이를 설명해줘",
-            height=100,
+            height=110,
+            label_visibility="collapsed",
         )
-        submitted = st.form_submit_button("💬  분석 리포트 생성")
+        submitted = st.form_submit_button("분석 리포트 생성 →")
 
     if submitted and question.strip():
-        progress_bar = st.progress(0, text="질문 유형 분류 중…")
+        st.session_state.preset_q2 = ""
+        progress_bar = st.progress(0, text="분석 준비 중…")
 
-        with st.spinner("분석 리포트 생성 중 (수십 초 소요)…"):
+        with st.spinner(""):
             t0 = time.time()
-            progress_bar.progress(20, text="문서 검색 중…")
+            progress_bar.progress(15, text="질문 유형 분류 중…")
             result = answer_question(
                 retriever, question,
-                retrieve_fn=lambda r, q, k: ROUTER.retrieve(r, q, k=k),
-                rerank_fn=lambda q, docs, top_n: RERANKER.rerank(q, docs, top_n=top_n),
+                retrieve_fn=lambda r, q, k=40: ROUTER.retrieve(r, q, k=k),
+                #rerank_fn=lambda q, docs, top_n: RERANKER.rerank(q, docs, top_n=top_n),
             )
             elapsed = time.time() - t0
             progress_bar.progress(100, text="완료!")
 
         qt   = result.get("question_type", "other")
-        icon, label, badge = QUESTION_TYPE_META.get(qt, ("📝", "분석", "badge-gray"))
+        icon, label, cls = QUESTION_TYPE_META.get(qt, ("📝", "분석", "qt-other"))
         sources = result.get("sources", [])
 
-        # 메타 요약 카드
+        # 메타 요약
         st.markdown(f"""
-        <div class="hz-card" style="display:flex;flex-wrap:wrap;gap:1.2rem;align-items:center;padding:1rem 1.5rem;">
+        <div class="mc-card" style="display:flex;flex-wrap:wrap;gap:1.5rem;
+                                     align-items:center;padding:1.2rem 1.8rem;">
           <div>
-            <div style="font-size:0.72rem;color:var(--text-sub);margin-bottom:0.25rem;">질문 유형</div>
-            <span class="hz-badge {badge}" style="font-size:0.82rem;padding:0.3rem 0.8rem;">
+            <div style="font-size:0.68rem;font-weight:700;color:var(--gray);
+                        text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.4rem;">질문 유형</div>
+            <span class="mc-pill {cls}" style="font-size:0.82rem;padding:0.3rem 1rem;">
               {icon} {label}
             </span>
           </div>
           <div>
-            <div style="font-size:0.72rem;color:var(--text-sub);margin-bottom:0.25rem;">참고 증권사</div>
-            <div style="font-size:0.85rem;font-weight:600;color:var(--text-main);">
+            <div style="font-size:0.68rem;font-weight:700;color:var(--gray);
+                        text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.4rem;">참고 증권사</div>
+            <div style="font-size:0.9rem;font-weight:600;color:var(--ink);">
               {', '.join(sources) if sources else '—'}
             </div>
           </div>
           <div style="margin-left:auto;text-align:right;">
-            <div style="font-size:0.72rem;color:var(--text-sub);">생성 시간</div>
-            <div style="font-weight:700;color:var(--brand);">{elapsed:.1f}s</div>
+            <div style="font-size:0.68rem;font-weight:700;color:var(--gray);
+                        text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.4rem;">생성 시간</div>
+            <div style="font-size:1.2rem;font-weight:700;color:var(--orange);">{elapsed:.1f}s</div>
           </div>
         </div>
         """, unsafe_allow_html=True)
 
         # 리포트 본문
-        st.markdown('<div class="report-area">', unsafe_allow_html=True)
-        st.markdown(result["answer"])
+        st.markdown('<div class="mc-report">', unsafe_allow_html=True)
+        st.markdown(_fix_md_paragraphs(result["answer"]))
         st.markdown('</div>', unsafe_allow_html=True)
 
         # 다운로드
         st.download_button(
-            "📥  리포트 저장 (.md)",
+            "리포트 저장 (.md)",
             data=result["answer"],
             file_name=f"report_{qt}_{int(t0)}.md",
             mime="text/markdown",
         )
 
-        # 참조 청크 출처
+        # 참조 청크
         retrieved_docs = result.get("docs", [])
         if retrieved_docs:
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<div class="hz-section-header">📎 참조 청크 출처</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="mc-section">📎 참조 청크 — {len(retrieved_docs)}개</div>', unsafe_allow_html=True)
+
             for i, doc in enumerate(retrieved_docs, 1):
                 broker  = doc.metadata.get("source_firm", doc.metadata.get("broker", "-"))
                 date    = doc.metadata.get("report_date", "-")
@@ -720,24 +683,22 @@ elif page == "질문 · 분석":
                 if score is not None:
                     try:
                         s = float(score)
-                        pct = max(0, min(100, int(s * 100)))
-                        bar_color = "#01B574" if pct >= 70 else "#FFB547" if pct >= 40 else "#EE5D50"
-                        score_html = f'<span style="font-size:0.7rem;font-weight:700;color:{bar_color};background:{bar_color}22;padding:0.1rem 0.45rem;border-radius:999px;">score {s:.3f}</span>'
+                        score_html = f'<span class="mc-pill pill-outline" style="font-size:0.68rem;">score {s:.3f}</span>'
                     except Exception:
                         pass
 
-                sector_html = sector_badge(sector) if sector and sector != "-" else ""
+                sector_html = sector_pill(sector) if sector and sector != "-" else ""
                 preview = content[:200] + ("…" if len(content) > 200 else "")
 
-                with st.expander(f"#{i}  {broker}  ·  {date}  {'· ' + title[:30] if title else ''}"):
+                with st.expander(f"#{i}  {broker}  ·  {date}  {'· ' + title[:28] if title else ''}"):
                     st.markdown(f"""
-                    <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.6rem;align-items:center;">
+                    <div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.7rem;align-items:center;">
                       {sector_html} {score_html}
                     </div>
-                    <div style="font-size:0.83rem;color:var(--text-body);line-height:1.7;">{preview}</div>
+                    <div style="font-size:0.84rem;color:var(--gray);line-height:1.75;">{preview}</div>
                     """, unsafe_allow_html=True)
                     if len(content) > 200:
-                        if st.toggle("전문 보기", key=f"chunk_full_{i}"):
+                        if st.toggle("전문 보기", key=f"full2_{i}"):
                             st.text(content)
 
     elif submitted:
@@ -747,34 +708,44 @@ elif page == "질문 · 분석":
 # ── 페이지: 최근 리포트 ─────────────────────────────────────────────────────────
 
 elif page == "최근 리포트":
-    st.markdown('<p class="hz-page-title">생성된 리포트</p>', unsafe_allow_html=True)
-    st.markdown('<p class="hz-page-sub">data/reports_output/ 폴더에 저장된 리포트 목록</p>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="mc-hero" style="padding:2rem 2.5rem;">
+      <p class="mc-hero-title" style="font-size:1.6rem;">생성된 리포트</p>
+      <p class="mc-hero-sub">data/reports_output/ 저장 파일</p>
+    </div>
+    """, unsafe_allow_html=True)
 
     reports_dir = PROJECT_ROOT / "data" / "reports_output"
-    md_files = sorted(reports_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True) if reports_dir.exists() else []
+    md_files = (
+        sorted(reports_dir.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if reports_dir.exists() else []
+    )
 
     if not md_files:
         st.markdown("""
-        <div class="hz-card" style="text-align:center;padding:3rem;">
-          <div style="font-size:2.5rem;margin-bottom:0.8rem;">📂</div>
-          <div style="font-size:1rem;font-weight:600;color:var(--text-main);">아직 생성된 리포트가 없습니다</div>
-          <div style="font-size:0.85rem;color:var(--text-sub);margin-top:0.4rem;">
+        <div class="mc-card" style="text-align:center;padding:4rem 2rem;">
+          <div style="font-size:3rem;margin-bottom:1rem;">📂</div>
+          <div style="font-size:1.1rem;font-weight:700;color:var(--ink);letter-spacing:-0.01em;">
+            아직 생성된 리포트가 없습니다
+          </div>
+          <div style="font-size:0.88rem;color:var(--gray);margin-top:0.5rem;">
             질문·분석 탭에서 리포트를 생성해보세요.
           </div>
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.markdown(f'<div style="font-size:0.82rem;color:var(--text-sub);margin-bottom:1rem;">총 {len(md_files)}개의 리포트</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.82rem;color:var(--gray);margin-bottom:1rem;">총 {len(md_files)}개</div>', unsafe_allow_html=True)
         for f in md_files:
-            mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))
-            size_kb = f.stat().st_size / 1024
-            with st.expander(f"📄 {f.name}  —  {mtime}  ({size_kb:.1f} KB)"):
+            mtime    = time.strftime("%Y-%m-%d %H:%M", time.localtime(f.stat().st_mtime))
+            size_kb  = f.stat().st_size / 1024
+            with st.expander(f"📄  {f.stem[:50]}  —  {mtime}  ({size_kb:.1f} KB)"):
                 content = f.read_text(encoding="utf-8", errors="replace")
                 st.markdown(content)
                 st.download_button(
-                    "📥 다운로드",
+                    "다운로드",
                     data=content,
                     file_name=f.name,
                     mime="text/markdown",
-                    key=f"dl_{f.name}",
+                    key=f"dl2_{f.name}",
                 )
