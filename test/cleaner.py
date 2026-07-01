@@ -435,4 +435,3 @@ def clean_documents(pages: list[Document]) -> list[Document]:
 
     print(f"정제 완료: {len(cleaned)}페이지 유지 / {removed}페이지 제거")
     return cleaned
-# 오줌 발싸 히히
